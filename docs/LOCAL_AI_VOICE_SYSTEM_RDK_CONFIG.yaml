@@ -1,0 +1,179 @@
+# config-edge-rdk.yaml
+# 专用于 RDK (Robotics Development Kit) 4GB RAM 边缘设备的配置
+# 基于高通骁龙 NPU，10TOPS 推理能力
+#
+# 使用方法：
+#   python main.py --config config-edge-rdk.yaml
+
+app:
+  name: "LocalAI Voice Edge - RDK"
+  version: "0.1.0"
+  log_level: "WARNING"  # 减少日志开销（节省 CPU）
+  debug: false
+
+# ============================================================================
+# STT 配置（轻量版本）
+# ============================================================================
+stt:
+  engine: "faster-whisper"
+  
+  # ⚠️ 关键：使用 'tiny' 而非 'base'
+  # - tiny: 39M 参数，~139MB，最快
+  # - base: 74M 参数，~290MB，平衡
+  model_name: "tiny"
+  model_path: "models/stt/whisper-tiny.pt"
+  
+  language: "zh"  # 中文
+  device: "cpu"  # 大多数 RDK 无 CUDA，STT 用 CPU
+  compute_type: "int8"  # 量化推理
+  batch_size: 1
+
+# ============================================================================
+# LLM 配置（GGML + RDK NPU）
+# ============================================================================
+llm:
+  # 使用 GGML 后端而非 vLLM（vLLM 需要 10GB+ 内存）
+  engine: "ggml"
+  
+  # 推荐选择：Qwen-1.5B 量化版
+  # 下载：huggingface-cli download second-state/Qwen-1.5B-Chat-GGUF \
+  #       qwen-1.5b-chat-q3_k_m.gguf --local-dir ./models/llm
+  model_name: "Qwen-1.5B-Chat-GGUF"
+  model_path: "models/llm/qwen-1.5b-chat-q3_k_m.gguf"
+  
+  # GGML 优化参数
+  n_threads: 4  # RDK 通常 4-8 核心，设置为核心数
+  n_threads_batch: 4  # 批量线程（推理流水线）
+  
+  # 关键：NPU 配置
+  n_gpu_layers: -1  # -1 = 转移全部层到 GPU/NPU（如果可用）
+  
+  # 上下文窗口（受内存和速度限制）
+  n_ctx: 512  # 严格限制为 512 tokens（超过会 OOM）
+  n_batch: 256  # 预分配缓冲区
+  
+  # 内存优化
+  mmap: true  # 使用内存映射（减少 RAM 占用）
+  mlock: false  # 不锁定内存（节省物理 RAM）
+  
+  # 推理参数
+  temperature: 0.7  # 创意度
+  top_p: 0.95  # 多样性
+  max_tokens: 256  # ⚠️ 严格限制输出长度（超过会超时）
+  
+  # 流式生成
+  stream: true
+
+# ============================================================================
+# TTS 配置（轻量版）
+# ============================================================================
+tts:
+  # Kokoro：最轻量的高质量 TTS
+  # 或使用 AIRI 中已有的 WASM 版本
+  engine: "kokoro"  # kokoro, fastpitch_hifigan, coqui
+  model_path: "models/tts/kokoro.onnx"
+  
+  device: "cpu"  # TTS 用 CPU，保留 NPU 给 LLM
+  batch_size: 1  # 严格单个任务
+  
+  # ONNX 配置（如果使用 ONNX 模型）
+  use_ort: true
+  execution_provider: "CUDAExecutionProvider"  # 自动降级到 CPU 若无 CUDA
+
+# ============================================================================
+# VAD 配置（语音活动检测）
+# ============================================================================
+vad:
+  enabled: true
+  
+  # Silero VAD（轻量，ONNX，~40MB）
+  model_path: "models/vad/silero_vad.jit"
+  
+  threshold: 0.6  # 灵敏度阈值
+  speech_pad_ms: 80  # 语音前后缓冲
+  
+  # 关键：增加沉默检测以避免误检
+  min_silence_duration_ms: 500  # 500ms 沉默才认为句子结束
+
+# ============================================================================
+# 音频配置
+# ============================================================================
+audio:
+  # 采样率
+  sample_rate: 16000  # Hz（16kHz）
+  channels: 1  # 单声道
+  chunk_size: 1024  # 帧大小
+  
+  # RDK 音频设备
+  input_device_index: -1  # -1 = 系统默认麦克风
+  output_device_index: -1  # -1 = 系统默认扬声器
+  backend: "pyaudio"  # pyaudio, sounddevice
+
+# ============================================================================
+# 流水线配置（关键：禁用并发）
+# ============================================================================
+pipeline:
+  # 文本分块策略
+  text_chunking:
+    min_words: 5  # 最少 5 个词触发 TTS
+    max_words: 20  # 最多 20 个词一个分块
+    boost: 1  # 不加速分块
+  
+  # ⚠️ 严格单线程
+  # 无法在 4GB 内存下支持并发 TTS/LLM
+  max_concurrent_tasks: 1  # 禁止并发
+  sequential_only: true  # 强制序列执行
+  
+  # 队列超时
+  tts_queue_timeout_sec: 60
+
+# ============================================================================
+# 系统提示（调整以适应轻量模型）
+# ============================================================================
+system_prompt: |
+  你是一个有帮助的中文 AI 助手。
+  尽量用简洁、自然的语言回答用户的问题。
+  如果不确定答案，请说"我不太确定"。
+  
+  # 回答指南
+  - 回答要简洁，最好不超过 200 字
+  - 如果用户问技术问题，直接给出关键点
+  - 保持友善和耐心的语气
+
+# ============================================================================
+# 日志配置（最小化开销）
+# ============================================================================
+logging:
+  level: "WARNING"  # 仅记录警告和错误，减少 I/O
+  format: "simple"  # simple 格式，非 JSON（节省处理）
+  file: "logs/app.log"
+  max_size_mb: 50  # 小日志文件
+  backup_count: 3
+
+# ============================================================================
+# 监控与性能（禁用以节省资源）
+# ============================================================================
+monitoring:
+  enabled: false  # 禁用实时监控（节省 CPU）
+  memory_warning_threshold_mb: 3500  # 距离 4GB 仅 500MB 时警告
+  profile_enabled: false  # 禁用 CPU 性能分析
+
+# ============================================================================
+# 性能优化提示
+# ============================================================================
+# 
+# 若遇到 OOM（内存溢出）：
+#   1. 降级 n_ctx 从 512 → 256
+#   2. 一定要用 Q3_K_M 或更低的量化（不能用 Q4/Q5）
+#   3. 缩短 max_tokens 从 256 → 128
+#   4. 降低 sample_rate 从 16000 → 8000？（不推荐，影响 STT 质量）
+#
+# 若推理缓慢（< 3 tokens/sec）：
+#   1. 检查 n_gpu_layers 是否 = -1（则 NPU 未启用）
+#   2. 增加 n_threads 到 8（如果 RDK 有 8+ 核）
+#   3. 换更轻的模型：Qwen-0.5B 而非 1.5B
+#
+# 若 STT 识别不准：
+#   1. 降低 VAD threshold（更敏感）
+#   2. 增加 min_silence_duration_ms
+#   3. 确认麦克风质量与距离

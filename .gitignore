@@ -1,0 +1,35 @@
+# Python virtual environments
+venv/
+.venv/
+env/
+voice-env/
+lib/
+lib64/
+bin/
+include/
+share/
+lib-python/
+site-packages/
+
+# Downloaded model artifacts
+models/**/*.gguf
+models/**/*.onnx
+models/**/*.pt
+models/**/*.jit
+models/**/*.bin
+
+# Runtime logs
+logs/
+*.log
+*.log.*
+
+# Audio recordings and test outputs
+recordings/
+tests/audio/
+*.wav
+
+# Python and tool caches
+__pycache__/
+*.pyc
+.cache/
+.pytest_cache/

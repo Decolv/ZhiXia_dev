@@ -1,0 +1,16 @@
+app:
+  name: "LocalAI STT CLI - RDK"
+  log_level: "INFO"
+
+stt:
+  engine: "faster-whisper"
+  model_name: "tiny"
+  language: "zh"
+  device: "cpu"
+  compute_type: "int8"
+
+audio:
+  sample_rate: 16000
+  channels: 1
+  seconds: 4
+  output_dir: "recordings"
