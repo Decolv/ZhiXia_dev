@@ -1,0 +1,16 @@
+app:
+  name: "LocalAI STT CLI - AMD NPU"
+  log_level: "INFO"
+
+stt:
+  engine: "whisper-ryzenai"  # 切换到 RyzenAI 引擎
+  model_path: "models/whisper-tiny-ryzenai" # 预编译的 NPU 模型路径
+  language: "zh"
+  device: "npu"
+  provider: "VitisAIExecutionProvider" # AMD NPU 专用的 EP
+
+audio:
+  sample_rate: 16000
+  channels: 1
+  seconds: 4
+  output_dir: "recordings"
