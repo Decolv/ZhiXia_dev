@@ -17,6 +17,8 @@ models/**/*.onnx
 models/**/*.pt
 models/**/*.jit
 models/**/*.bin
+models/**/*.rkllm
+asset/
 
 # Runtime logs
 logs/
@@ -33,3 +35,14 @@ __pycache__/
 *.pyc
 .cache/
 .pytest_cache/
+
+# RKNN libraries
+rknn_libs/
+
+# Installation scripts
+install_dependencies.sh
+setup_rknpu.sh
+
+# Runtime scripts
+run_fast_tts.sh
+run_npu_only.sh
