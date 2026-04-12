@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ASR + LLM + TTS 完整流程 (高速版)
-使用MeloTTS替代ChatTTS，实现2秒内语音合成
+ASR + LLM + TTS 完整流程 (Piper TTS超高速版)
+使用Piper TTS，速度极快，专为嵌入式设备优化
 """
 
 import os
@@ -20,6 +20,7 @@ os.environ['LD_LIBRARY_PATH'] = os.path.join(script_dir, 'rknn_libs') + ':' + os
 # 确保目录存在
 os.makedirs(os.path.join(script_dir, '.cache', 'modelscope'), exist_ok=True)
 os.makedirs(os.path.join(script_dir, 'output'), exist_ok=True)
+os.makedirs(os.path.join(script_dir, 'models', 'piper'), exist_ok=True)
 
 
 def force_gc():
@@ -28,8 +29,8 @@ def force_gc():
     gc.collect()
 
 
-def llm_inference_npu_stream(user_input, max_new_tokens=64):
-    """使用NPU进行LLM推理"""
+def llm_inference_npu_stream(user_input, max_new_tokens=32):
+    """使用NPU进行LLM推理（快速响应模式）"""
     from rkllm_inference import create_rkllm_from_hf
     
     model_path = os.path.join(script_dir, 'models', 'Qwen3-1.7B-w8a8-rk3588.rkllm')
@@ -38,19 +39,19 @@ def llm_inference_npu_stream(user_input, max_new_tokens=64):
         raise FileNotFoundError(f"RKLLM模型不存在: {model_path}")
     
     print("="*60)
-    print("加载RKLLM模型 (NPU加速)")
+    print("加载RKLLM模型 (NPU加速 - 快速模式)")
     print("="*60)
     
     llm = create_rkllm_from_hf(
         model_path,
-        max_context_len=1024,
+        max_context_len=512,  # 减少上下文长度
         max_new_tokens=max_new_tokens,
-        temperature=0.7,
-        top_p=0.9
+        temperature=0.8,  # 提高温度，减少计算
+        top_p=0.95
     )
     
     llm.set_chat_template(
-        system_prompt="你是AI助手，回答简洁。",
+        system_prompt="你是AI助手，用一句话简短回答。",
         prompt_prefix="",
         prompt_postfix=""
     )
@@ -69,7 +70,7 @@ def llm_inference_npu_stream(user_input, max_new_tokens=64):
     
     del llm
     force_gc()
-    time.sleep(0.5)
+    time.sleep(0.3)
     
     return response
 
@@ -122,36 +123,79 @@ def asr_recognition_int8(audio_path):
         return None
 
 
-def tts_melotts(text, output_path):
-    """
-    使用MeloTTS进行高速语音合成
-    速度比ChatTTS快5-10倍，支持CPU实时推理
-    """
-    print("="*60)
-    print("步骤3: 语音合成 (TTS - MeloTTS高速版)")
-    print("="*60)
+def download_piper_model():
+    """下载Piper中文模型"""
+    import urllib.request
+    
+    model_dir = os.path.join(script_dir, 'models', 'piper')
+    model_file = os.path.join(model_dir, 'zh_CN-huayan-medium.onnx')
+    config_file = os.path.join(model_dir, 'zh_CN-huayan-medium.onnx.json')
+    
+    if os.path.exists(model_file) and os.path.exists(config_file):
+        return model_file, config_file
+    
+    print("正在下载Piper中文模型...")
+    
+    base_url = "https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/"
     
     try:
-        # 尝试导入MeloTTS
-        from melo.api import TTS
+        print("下载模型文件...")
+        urllib.request.urlretrieve(
+            base_url + "zh_CN-huayan-medium.onnx",
+            model_file
+        )
         
-        print("正在加载MeloTTS模型...")
+        print("下载配置文件...")
+        urllib.request.urlretrieve(
+            base_url + "zh_CN-huayan-medium.onnx.json",
+            config_file
+        )
         
-        # 使用中文模型
-        model = TTS(language='ZH', device='cpu')
+        print("✅ 模型下载完成")
+        return model_file, config_file
         
-        # 选择说话人
-        speaker_ids = model.hps.data.spk2id
-        speaker_id = speaker_ids['ZH']  # 使用中文说话人
+    except Exception as e:
+        print(f"❌ 模型下载失败: {e}")
+        print("\n手动下载方法:")
+        print(f"1. 访问: {base_url}")
+        print(f"2. 下载 zh_CN-huayan-medium.onnx 到 {model_dir}")
+        print(f"3. 下载 zh_CN-huayan-medium.onnx.json 到 {model_dir}")
+        return None, None
+
+
+def tts_piper(text, output_path):
+    """
+    使用Piper TTS进行超高速语音合成
+    速度比ChatTTS快10-20倍，专为嵌入式设备优化
+    """
+    print("="*60)
+    print("步骤3: 语音合成 (TTS - Piper)")
+    print("="*60)
+    
+    # 方法1: 使用piper-tts Python包
+    try:
+        from piper import PiperVoice
+        import wave
+        
+        print("正在加载Piper TTS模型...")
+        
+        # 下载或获取模型路径
+        model_file, config_file = download_piper_model()
+        
+        if not model_file or not config_file:
+            raise FileNotFoundError("Piper模型文件不存在")
+        
+        # 加载模型
+        voice = PiperVoice.load(model_file, config_file)
         
         print(f"正在合成语音: {text}")
-        print(f"说话人: ZH")
         
         # 开始计时
         start_time = time.time()
         
         # 合成语音
-        model.tts_to_file(text, speaker_id, output_path, speed=1.0)
+        with wave.open(output_path, 'wb') as wav_file:
+            voice.synthesize(text, wav_file)
         
         # 计算耗时
         elapsed = time.time() - start_time
@@ -159,81 +203,62 @@ def tts_melotts(text, output_path):
         print(f"✅ 语音已保存到: {output_path}")
         
         # 释放模型
-        del model
+        del voice
         force_gc()
-        
-        if elapsed > 2.0:
-            print(f"⚠️ 警告: 合成时间超过2秒 ({elapsed:.2f}秒)")
         
         return True
         
     except ImportError:
-        print("⚠️ MeloTTS未安装，尝试安装...")
-        print("  运行: pip install melotts")
-        return False
+        # 方法2: 使用命令行版本的piper
+        print("⚠️ piper-tts Python包未安装，尝试使用命令行版本...")
+        return tts_piper_cli(text, output_path)
+        
     except Exception as e:
-        print(f"❌ MeloTTS合成失败: {e}")
+        print(f"❌ Piper TTS合成失败: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
-def tts_edge_tts(text, output_path):
-    """
-    使用edge-tts作为备选方案
-    需要网络连接，但速度非常快
-    """
-    print("="*60)
-    print("步骤3: 语音合成 (TTS - Edge-TTS备选)")
-    print("="*60)
+def tts_piper_cli(text, output_path):
+    """使用Piper命令行版本"""
+    import subprocess
     
     try:
-        import edge_tts
-        import asyncio
+        # 检查piper命令是否存在
+        result = subprocess.run(['which', 'piper'], capture_output=True, text=True)
+        if result.returncode != 0:
+            print("⚠️ 未找到piper命令")
+            return False
         
-        print("正在使用Edge-TTS合成...")
+        model_file, config_file = download_piper_model()
+        if not model_file:
+            return False
         
-        async def generate():
-            # 使用中文语音
-            voice = "zh-CN-XiaoxiaoNeural"
-            communicate = edge_tts.Communicate(text, voice)
-            await communicate.save(output_path)
+        print(f"正在使用Piper CLI合成: {text}")
         
         # 开始计时
         start_time = time.time()
         
-        # 运行异步任务
-        asyncio.run(generate())
+        # 使用piper命令行
+        cmd = f'echo "{text}" | piper --model {model_file} --output_file {output_path}'
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         
-        # 计算耗时
-        elapsed = time.time() - start_time
-        print(f"✅ 语音合成完成，耗时: {elapsed:.2f}秒")
-        print(f"✅ 语音已保存到: {output_path}")
-        
-        return True
-        
-    except ImportError:
-        print("⚠️ edge-tts未安装")
-        return False
+        if result.returncode == 0:
+            elapsed = time.time() - start_time
+            print(f"✅ 语音合成完成，耗时: {elapsed:.2f}秒")
+            print(f"✅ 语音已保存到: {output_path}")
+            return True
+        else:
+            print(f"❌ Piper CLI执行失败: {result.stderr}")
+            return False
+            
     except Exception as e:
-        print(f"❌ Edge-TTS合成失败: {e}")
+        print(f"❌ Piper CLI失败: {e}")
         return False
 
 
-def tts_synthesis_fast(text, output_path):
-    """
-    高速TTS合成，优先使用MeloTTS，失败则使用edge-tts
-    """
-    # 首先尝试MeloTTS（离线，速度快）
-    if tts_melotts(text, output_path):
-        return True
-    
-    print("\n尝试备选方案...")
-    
-    # 备选：edge-tts（在线，需要网络）
-    if tts_edge_tts(text, output_path):
-        return True
-    
-    print("\n所有TTS方案均失败")
-    return False
+
 
 
 def play_audio(audio_path):
@@ -289,15 +314,15 @@ def check_memory():
 
 def main():
     print("\n" + "="*60)
-    print("🎙️ ASR + LLM + TTS 智能语音助手 (高速版)")
-    print("   使用MeloTTS，目标: 2秒内合成")
+    print("🎙️ ASR + LLM + TTS 智能语音助手 (Piper版)")
+    print("   快速响应模式")
     print("="*60 + "\n")
     
     mem_available = check_memory()
     if mem_available:
         print(f"当前可用内存: {mem_available:.2f} GB")
-        if mem_available < 3.0:
-            print("⚠️ 警告: 可用内存不足3GB")
+        if mem_available < 2.0:
+            print("⚠️ 警告: 可用内存不足2GB")
         print()
     
     input_audio = "/home/quark/音乐/test.wav"
@@ -306,7 +331,7 @@ def main():
         print(f"❌ 输入音频文件不存在: {input_audio}")
         sys.exit(1)
     
-    output_audio = os.path.join(script_dir, "output", "llm_response_fast.wav")
+    output_audio = os.path.join(script_dir, "output", "llm_response_piper.wav")
     
     # 步骤1: ASR识别
     recognized_text = asr_recognition_int8(input_audio)
@@ -315,9 +340,9 @@ def main():
         print("\n❌ ASR识别失败，流程终止")
         sys.exit(1)
     
-    # 步骤2: LLM推理
+    # 步骤2: LLM推理（快速模式：max_new_tokens=32）
     try:
-        llm_response = llm_inference_npu_stream(recognized_text, max_new_tokens=64)
+        llm_response = llm_inference_npu_stream(recognized_text, max_new_tokens=32)
     except Exception as e:
         print(f"\n❌ LLM推理失败: {e}")
         import traceback
@@ -328,13 +353,15 @@ def main():
         print("\n❌ LLM返回空回复，流程终止")
         sys.exit(1)
     
-    # 步骤3: TTS合成 (高速版)
-    success = tts_synthesis_fast(llm_response, output_audio)
+    # 步骤3: TTS合成（仅使用Piper）
+    success = tts_piper(llm_response, output_audio)
     
     if not success:
         print("\n❌ TTS合成失败，流程终止")
-        print("\n建议安装MeloTTS:")
-        print("  pip install melotts")
+        print("\n请安装Piper TTS:")
+        print("  pip install piper-tts")
+        print("\n或运行安装脚本:")
+        print("  bash install_fast_tts.sh")
         sys.exit(1)
     
     # 步骤4: 自动播放
@@ -342,17 +369,18 @@ def main():
     
     # 完成
     print("\n" + "="*60)
-    print("🎉 完整流程成功！ (NPU加速 + 高速TTS)")
+    print("🎉 完整流程成功！")
     print("="*60)
     print(f"📥 输入音频: {input_audio}")
     print(f"📝 识别文本: {recognized_text}")
     print(f"🤖 AI回复: {llm_response}")
-    print(f"⚡ 推理后端: RKNN NPU")
+    print(f"⚡ 推理后端: RKNN NPU (快速模式)")
     print(f"🔧 ASR量化: INT8")
-    print(f"🚀 TTS引擎: MeloTTS/Edge-TTS")
+    print(f"🚀 TTS引擎: Piper")
     print(f"📤 输出音频: {output_audio}")
     print("="*60)
 
 
 if __name__ == "__main__":
     main()
+
