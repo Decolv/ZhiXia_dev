@@ -46,3 +46,6 @@ setup_rknpu.sh
 # Runtime scripts
 run_fast_tts.sh
 run_npu_only.sh
+
+# Claude Code sensitive files
+.claude/

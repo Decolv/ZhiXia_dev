@@ -176,64 +176,11 @@ def tts_melotts(text, output_path):
         return False
 
 
-def tts_edge_tts(text, output_path):
-    """
-    使用edge-tts作为备选方案
-    需要网络连接，但速度非常快
-    """
-    print("="*60)
-    print("步骤3: 语音合成 (TTS - Edge-TTS备选)")
-    print("="*60)
-    
-    try:
-        import edge_tts
-        import asyncio
-        
-        print("正在使用Edge-TTS合成...")
-        
-        async def generate():
-            # 使用中文语音
-            voice = "zh-CN-XiaoxiaoNeural"
-            communicate = edge_tts.Communicate(text, voice)
-            await communicate.save(output_path)
-        
-        # 开始计时
-        start_time = time.time()
-        
-        # 运行异步任务
-        asyncio.run(generate())
-        
-        # 计算耗时
-        elapsed = time.time() - start_time
-        print(f"✅ 语音合成完成，耗时: {elapsed:.2f}秒")
-        print(f"✅ 语音已保存到: {output_path}")
-        
-        return True
-        
-    except ImportError:
-        print("⚠️ edge-tts未安装")
-        return False
-    except Exception as e:
-        print(f"❌ Edge-TTS合成失败: {e}")
-        return False
-
-
 def tts_synthesis_fast(text, output_path):
     """
-    高速TTS合成，优先使用MeloTTS，失败则使用edge-tts
+    高速TTS合成，使用MeloTTS（离线部署）
     """
-    # 首先尝试MeloTTS（离线，速度快）
-    if tts_melotts(text, output_path):
-        return True
-    
-    print("\n尝试备选方案...")
-    
-    # 备选：edge-tts（在线，需要网络）
-    if tts_edge_tts(text, output_path):
-        return True
-    
-    print("\n所有TTS方案均失败")
-    return False
+    return tts_melotts(text, output_path)
 
 
 def play_audio(audio_path):

@@ -1,0 +1,17 @@
+# Jupyter & Interactive UI
+jupyter>=1.0.0
+ipywidgets>=8.0.0
+pandas>=1.5.0
+psutil>=5.9.0
+
+# Core dependencies (inherited from parent project)
+# Python>=3.9
+# PyTorch==2.8.0
+# FunASR==1.3.1
+# ChatTTS>=0.1.0
+# MeloTTS>=0.1.0
+# PaddleSpeech>=1.4.0
+# pyttsx3>=2.90
+# faster-whisper>=0.10.0
+# sounddevice>=0.4.5
+# modelscope>=1.8.0
