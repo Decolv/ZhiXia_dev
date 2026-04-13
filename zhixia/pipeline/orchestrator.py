@@ -13,7 +13,7 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from zhixia.asr.base import ASREngine, ASRResult
 from zhixia.audio.base import AudioPlayer
@@ -173,14 +173,14 @@ class VoicePipeline:
     # 流水线核心
     # ------------------------------------------------------------------
 
-    def _run_streaming_pipeline(self, user_text: str, rag_context: Optional[RAGContext]) -> str:
+    def _run_streaming_pipeline(self, user_text: str, rag_context: Optional[RAGContext]) -> tuple[str, dict[str, Any]]:
         """
         三线程流水线：
           Thread-A (LLM)  → tts_queue
           Thread-B (TTS)  → play_queue
           Thread-C (Play) → 播放
         主线程等待 Thread-C 结束。
-        返回 LLM 完整原始输出。
+        返回 (LLM 完整原始输出, timing_stats)。
         """
         tts_queue: queue.Queue = queue.Queue(maxsize=4)
         play_queue: queue.Queue = queue.Queue(maxsize=4)
@@ -430,7 +430,7 @@ class VoicePipeline:
         if errors:
             raise errors[0]
 
-        return full_output_holder[0] if full_output_holder else "", timing_stats
+        return (full_output_holder[0] if full_output_holder else "", timing_stats)
 
     # ------------------------------------------------------------------
     # 消息构建
