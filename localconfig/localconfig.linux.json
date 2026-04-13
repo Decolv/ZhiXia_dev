@@ -3,7 +3,7 @@
     "enabled": true,
     "engine": "funasr",
     "model": "iic/speech_paraformer_asr_nat-zh-cn-16k-common-vocab8358-tensorflow1",
-    "input_audio": "/home/quark/音乐/test.wav",
+    "input_audio": "/home/quark/test.wav",
     "language": "zh_CN"
   },
   "llm": {

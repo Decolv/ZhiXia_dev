@@ -1,6 +1,7 @@
 # Python virtual environments
 venv/
 .venv/
+.venv*/
 env/
 voice-env/
 lib/
@@ -14,6 +15,7 @@ site-packages/
 # Downloaded model artifacts
 models/**/*.gguf
 models/**/*.onnx
+models/**/*.onnx.json
 models/**/*.pt
 models/**/*.jit
 models/**/*.bin
@@ -46,3 +48,8 @@ setup_rknpu.sh
 # Runtime scripts
 run_fast_tts.sh
 run_npu_only.sh
+
+# Local PC testing files
+localconfig/localconfig.pc.json
+run_pc.ps1
+debug_pc.log

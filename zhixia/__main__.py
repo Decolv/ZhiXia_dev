@@ -1,6 +1,7 @@
 """ZhiXia 语音助手入口：python -m zhixia"""
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -16,9 +17,14 @@ from zhixia.tts.piper_engine import PiperTTSEngine
 from zhixia.utils.logging import setup_logging
 
 # 添加项目根目录到 sys.path（支持从 IDE 运行）
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+
+# 默认将 ModelScope 缓存固定到项目目录，和文档约定保持一致。
+_DEFAULT_MODELSCOPE_CACHE = _PROJECT_ROOT / ".cache" / "modelscope"
+os.environ.setdefault("MODELSCOPE_CACHE", str(_DEFAULT_MODELSCOPE_CACHE))
+_DEFAULT_MODELSCOPE_CACHE.mkdir(parents=True, exist_ok=True)
 
 
 def create_asr_engine(config):
@@ -47,18 +53,28 @@ def create_display(config):
 
 
 def main():
-    # 加载配置
-    settings = AppSettings.load()
+    logger = logging.getLogger(__name__)
+
+    # 加载配置（支持通过环境变量覆盖，便于 PC/Linux 分离测试）
+    config_override = os.environ.get("ZHIXIA_CONFIG", "").strip()
+    config_path = None
+    if config_override:
+        config_path = Path(config_override)
+        if not config_path.is_absolute():
+            config_path = _PROJECT_ROOT / config_path
+        print(f"🧩 使用配置文件: {config_path}")
+
+    settings = AppSettings.load(config_path=config_path)
 
     # 设置日志
     setup_logging(settings.log_level)
 
     # 检查内存（仅在 RK3588 上有意义）
-    if hasattr(settings, 'device') and settings.device.get('memory_optimization'):
+    device_config = getattr(settings, "device", None)
+    if isinstance(device_config, dict) and device_config.get("memory_optimization"):
         from zhixia.utils.memory import check_memory
         mem_available = check_memory()
         if mem_available and mem_available < 2.0:
-            logger = logging.getLogger(__name__)
             logger.warning(f"可用内存不足: {mem_available:.2f} GB")
 
     # 创建引擎
@@ -97,7 +113,6 @@ def main():
     # 获取输入音频路径
     input_audio = Path(settings.asr.input_audio) if settings.asr.input_audio else None
     if not input_audio or not input_audio.exists():
-        logger = logging.getLogger(__name__)
         logger.error(f"输入音频文件不存在: {input_audio}")
         print(f"\n❌ 输入音频文件不存在: {input_audio}")
         print("请在 localconfig.json 中配置 asr.input_audio")

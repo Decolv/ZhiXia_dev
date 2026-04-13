@@ -60,6 +60,15 @@ class PiperTTSEngine(TTSEngine):
         self._voice = PiperVoice.load(str(model_path), str(config_path))
         logger.info("Piper TTS 模型加载完成")
 
+    def _synthesize_wav(self, text: str, wav_writer) -> None:
+        """兼容新旧 Piper API：新版使用 synthesize_wav，旧版使用 synthesize。"""
+        synthesize_wav = getattr(self._voice, "synthesize_wav", None)
+        if callable(synthesize_wav):
+            synthesize_wav(text, wav_writer)
+        else:
+            # 兼容旧版 piper-tts API（synthesize(text, wav_writer)）
+            self._voice.synthesize(text, wav_writer)
+
     def is_available(self) -> bool:
         model_path, _ = self._model_files()
         return model_path.exists()
@@ -78,7 +87,7 @@ class PiperTTSEngine(TTSEngine):
         logger.info("Piper 合成: %s", text[:50])
 
         with wave.open(str(output_path), "wb") as f:
-            self._voice.synthesize(text, f)
+            self._synthesize_wav(text, f)
 
         logger.info("Piper 合成完成: %s", output_path)
         return True
@@ -95,5 +104,5 @@ class PiperTTSEngine(TTSEngine):
 
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wf:
-            self._voice.synthesize(text, wf)
+            self._synthesize_wav(text, wf)
         return buf.getvalue()
