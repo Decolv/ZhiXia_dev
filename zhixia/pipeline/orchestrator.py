@@ -150,6 +150,10 @@ class VoicePipeline:
                 buffer = ""
                 raw_chunks = []
                 emotion_shown = False  # 标记 emotion 是否已显示
+                # 结构化输出流式状态
+                in_text_value = False   # 是否正在接收 "text" 值内容
+                text_buf = ""           # text 值的流式缓冲区
+                sent_chars = 0          # 已送入 TTS 的字符数
                 for token in self.llm_engine.stream_chat(messages, self.config.llm.max_new_tokens):
                     raw_chunks.append(token)
                     buffer += token
@@ -157,25 +161,21 @@ class VoicePipeline:
                     # 如果启用了结构化输出，尝试立即提取并显示 emotion
                     if not emotion_shown and self.config.llm.enable_structured_output and '"emotion"' in buffer:
                         # 尝试提取 emotion 值
-                        idx = buffer.find('"emotion"')
-                        if idx >= 0:
-                            rest = buffer[idx + 9:]  # "emotion" 后面的部分
+                        emo_idx = buffer.find('"emotion"')
+                        if emo_idx >= 0:
+                            rest = buffer[emo_idx + 9:]
                             quote_idx = rest.find('"')
                             if quote_idx >= 0:
-                                value_start = idx + 9 + quote_idx + 1
-                                # 寻找值的结束 "（未转义）
+                                value_start = emo_idx + 9 + quote_idx + 1
                                 value_end = -1
                                 for i in range(value_start, len(buffer)):
                                     if buffer[i] == '"' and (i == 0 or buffer[i - 1] != '\\'):
                                         value_end = i
                                         break
-
                                 if value_end > 0:
-                                    # 找到了完整的 emotion 值
                                     emotion_value = buffer[value_start:value_end]
-                                    # 立即显示 emotion
                                     payload = DisplayPayload(
-                                        text="",  # text 还没生成
+                                        text="",
                                         emotion=emotion_value,
                                         is_thinking=False,
                                         metadata={}
@@ -194,42 +194,61 @@ class VoicePipeline:
                                     tts_queue.put(clean)
                             buffer = sentences[-1]
                     else:
-                        # 结构化输出：增量 JSON 解析
-                        # 检测 "text": 字段并提取值
-                        if '"text"' in buffer:
-                            idx = buffer.find('"text"')
-                            rest = buffer[idx + 6:]
-                            quote_idx = rest.find('"')
-                            if quote_idx >= 0:
-                                value_start = idx + 6 + quote_idx + 1
-                                # 寻找值的结束 "（未转义）
-                                value_end = -1
-                                for i in range(value_start, len(buffer)):
-                                    if buffer[i] == '"' and (i == 0 or buffer[i - 1] != '\\'):
-                                        value_end = i
-                                        break
-
-                                if value_end > 0:
-                                    # 找到了完整的 text 值
-                                    text_value = buffer[value_start:value_end]
-                                    # 检测句末标点并分句
-                                    if _SENTENCE_END.search(text_value):
-                                        parts = _split_sentences(text_value)
-                                        for part in parts:
-                                            clean = _strip_thinking_tokens(part)
-                                            if clean and len(clean) >= _MIN_CHUNK_LEN:
-                                                tts_queue.put(clean)
-                                    else:
-                                        # 没有句末标点，作为一个整体
-                                        if text_value.strip():
-                                            clean = _strip_thinking_tokens(text_value)
-                                            if clean:
-                                                tts_queue.put(clean)
-                                    # 清空 buffer 以便继续处理后续 token
-                                    buffer = ""
+                        # 结构化输出：流式 JSON 解析
+                        if not in_text_value:
+                            # 还没进入 text 值，检测 "text" 字段的开始引号
+                            if '"text"' in buffer:
+                                idx = buffer.find('"text"')
+                                rest = buffer[idx + 6:]
+                                quote_idx = rest.find('"')
+                                if quote_idx >= 0:
+                                    # 找到了 text 值的开始引号，进入流式模式
+                                    text_start = idx + 6 + quote_idx + 1
+                                    in_text_value = True
+                                    text_buf = buffer[text_start:]
+                                    sent_chars = 0
+                                    buffer = ""  # 清空 buffer，后续 token 不再追加到 buffer
+                        else:
+                            # 正在接收 text 值内容，追加到 text_buf
+                            text_buf += token
+                            # 检查新追加的部分是否包含闭合引号（text 值结束）
+                            close_idx = -1
+                            # 从上次检查位置开始，避免重复检查
+                            search_start = max(0, len(text_buf) - len(token) - 1)
+                            for i in range(search_start, len(text_buf)):
+                                if text_buf[i] == '"' and (i == 0 or text_buf[i - 1] != '\\'):
+                                    close_idx = i
+                                    break
+                            if close_idx >= 0:
+                                # text 值结束，发送剩余未送出的内容
+                                remaining = text_buf[sent_chars:close_idx]
+                                if remaining.strip():
+                                    clean = _strip_thinking_tokens(remaining)
+                                    if clean:
+                                        tts_queue.put(clean)
+                                in_text_value = False
+                                text_buf = ""
+                                # buffer 保持为空，丢弃后续 JSON 碎片（emotion 已提取）
+                                buffer = ""
+                            else:
+                                # text 值还在继续，尝试流式分句
+                                current = text_buf[sent_chars:]
+                                sentences = _split_sentences(current)
+                                if len(sentences) > 1:
+                                    for s in sentences[:-1]:
+                                        clean = _strip_thinking_tokens(s)
+                                        if clean and len(clean) >= _MIN_CHUNK_LEN:
+                                            tts_queue.put(clean)
+                                    sent_chars = len(text_buf) - len(sentences[-1])
 
                 # 处理剩余
-                if buffer.strip():
+                if in_text_value and text_buf[sent_chars:].strip():
+                    # text 值未正常闭合（LLM 截断），发送剩余内容
+                    clean = _strip_thinking_tokens(text_buf[sent_chars:])
+                    if clean:
+                        tts_queue.put(clean)
+                elif enable_sentence_split and buffer.strip():
+                    # 非结构化模式：发送 buffer 中剩余的未完成句子
                     clean = _strip_thinking_tokens(buffer)
                     if clean:
                         tts_queue.put(clean)
