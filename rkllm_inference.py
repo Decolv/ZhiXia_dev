@@ -10,7 +10,9 @@ import os
 import sys
 import ctypes
 import json
-from typing import Optional, Callable, List, Dict
+import queue
+import threading
+from typing import Optional, Callable, List, Dict, Generator
 from dataclasses import dataclass
 from enum import IntEnum
 
@@ -176,11 +178,13 @@ class RKLLM:
     def __init__(self, config: RKLLMConfig):
         if _rkllm_lib is None:
             raise RuntimeError("RKLLM库未加载，无法初始化")
-        
+
         self.config = config
         self.handle = ctypes.c_void_p()
         self._callback = None
         self._result_buffer = []
+        # 流式输出队列（None 表示结束，Exception 表示错误）
+        self._stream_queue: Optional[queue.Queue] = None
         
         # 自动检测模型类型
         if self.config.model_type == "auto":
@@ -230,14 +234,21 @@ class RKLLM:
             if result.text:
                 text = result.text.decode('utf-8')
                 self._result_buffer.append(text)
-                
+                # 流式模式：把每个 token 放入队列
+                if self._stream_queue is not None:
+                    self._stream_queue.put(text)
+
                 # 打印性能统计
                 if state == LLMCallState.RUN_FINISH:
                     perf = result.perf
                     print(f"\n[性能统计] Prefill: {perf.prefill_time_ms:.2f}ms ({perf.prefill_tokens} tokens), "
                           f"Generate: {perf.generate_time_ms:.2f}ms ({perf.generate_tokens} tokens), "
                           f"Memory: {perf.memory_usage_mb:.2f}MB")
-        
+
+        if state == LLMCallState.RUN_FINISH or state == LLMCallState.RUN_ERROR:
+            if self._stream_queue is not None:
+                self._stream_queue.put(None)  # 结束哨兵
+
         return 0  # 继续推理
     
     def _init_model(self):
@@ -320,11 +331,11 @@ class RKLLM:
     def chat(self, messages: list, max_new_tokens: Optional[int] = None) -> str:
         """
         对话模式
-        
+
         Args:
             messages: 消息列表，格式为 [{"role": "user", "content": "..."}, ...]
             max_new_tokens: 最大生成token数
-            
+
         Returns:
             生成的回复
         """
@@ -333,6 +344,45 @@ class RKLLM:
             return self._chat_qwen3(messages, max_new_tokens)
         else:
             return self._chat_qwen2(messages, max_new_tokens)
+
+    def stream_chat(self, messages: list, max_new_tokens: Optional[int] = None) -> Generator[str, None, None]:
+        """
+        流式对话模式，逐 token yield。
+
+        Args:
+            messages: 消息列表
+            max_new_tokens: 最大生成 token 数
+
+        Yields:
+            每个生成的 token 字符串
+        """
+        self._stream_queue = queue.Queue()
+        self._result_buffer = []
+
+        # 在后台线程运行推理（因为 _run 是阻塞的）
+        def _run_inference():
+            try:
+                if self.config.model_type == MODEL_TYPE_QWEN3:
+                    self._chat_qwen3(messages, max_new_tokens)
+                else:
+                    self._chat_qwen2(messages, max_new_tokens)
+            except Exception as e:
+                self._stream_queue.put(e)
+
+        t = threading.Thread(target=_run_inference, daemon=True)
+        t.start()
+
+        try:
+            while True:
+                item = self._stream_queue.get()
+                if item is None:
+                    break
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+        finally:
+            self._stream_queue = None
+            t.join(timeout=5)
     
     def _chat_qwen2(self, messages: list, max_new_tokens: Optional[int] = None) -> str:
         """Qwen2格式对话"""

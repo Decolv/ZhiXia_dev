@@ -12,7 +12,7 @@
     "max_new_tokens": 32,
     "temperature": 0.8,
     "top_p": 0.95,
-    "system_prompt": "你是AI助手，用一句话简短回答。"
+    "system_prompt": "你是AI助手，用一句话简短回答。/no_think"
   },
   "tts": {
     "enabled": true,

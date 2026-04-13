@@ -1,0 +1,20 @@
+[project]
+name = "zhixia"
+version = "0.1.0"
+description = "ZhiXia - 离线智能语音助手 (RK3588)"
+requires-python = ">=3.9"
+
+dependencies = [
+    "numpy",
+    "sounddevice",
+]
+
+[project.optional-dependencies]
+asr-funasr = ["funasr", "modelscope"]
+asr-whisper = ["faster-whisper"]
+tts-piper = ["piper-tts"]
+dev = ["pytest", "ipykernel"]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"

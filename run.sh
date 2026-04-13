@@ -39,8 +39,8 @@ echo ""
 echo "启动语音助手..."
 echo ""
 
-# 运行主程序
-python3 asr_llm_tts_piper.py
+# 运行主程序（重构后使用 zhixia 包）
+python3 -m zhixia
 
 echo ""
 echo "=================================="
