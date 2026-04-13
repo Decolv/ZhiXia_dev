@@ -1,0 +1,43 @@
+{
+  "asr": {
+    "enabled": true,
+    "model": "funasr",
+    "input_audio": "/home/quark/音乐/test.wav",
+    "language": "zh_CN"
+  },
+  "llm": {
+    "enabled": true,
+    "model_path": "models/Qwen3-1.7B-w8a8-rk3588.rkllm",
+    "max_context_len": 512,
+    "max_new_tokens": 32,
+    "temperature": 0.8,
+    "top_p": 0.95,
+    "system_prompt": "你是AI助手，用一句话简短回答。"
+  },
+  "tts": {
+    "enabled": true,
+    "engine": "piper",
+    "model": "zh_CN-huayan-medium",
+    "model_path": "models/piper/zh_CN-huayan-medium.onnx",
+    "speed": 1.0,
+    "quality": "medium"
+  },
+  "output": {
+    "audio_path": "output/llm_response_piper.wav",
+    "format": "wav",
+    "sample_rate": 22050
+  },
+  "cache": {
+    "modelscope_cache": ".cache/modelscope",
+    "enable_cache": true
+  },
+  "device": {
+    "platform": "rk3588",
+    "npu_enabled": true,
+    "memory_optimization": true
+  },
+  "logging": {
+    "level": "INFO",
+    "enable_debug": false
+  }
+}
