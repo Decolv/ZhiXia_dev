@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 _SENTENCE_END = re.compile(r'[。！？!?…]+|(?<=[^0-9])[.]+(?=[^0-9])|[；;]+')
 # 最短触发 TTS 的字符数（避免太短的片段频繁合成）
 _MIN_CHUNK_LEN = 8
+# 分片播放的句间停顿（秒），用于改善句子衔接
+_INTER_CHUNK_GAP_SEC = 0.02
+# 首播预缓冲句数：至少等到该句数合成完成再开始播放
+_INITIAL_PLAY_BUFFER_CHUNKS = 2
 # 流水线结束哨兵
 _SENTINEL = object()
 
@@ -153,7 +157,7 @@ class VoicePipeline:
         print(f"    - 总耗时:        {timing_stats['play']['duration']:.3f}s")
         print(f"    - 播放片段:      {timing_stats['play']['chunks_played']}")
         print(f"    - 队列等待:      {timing_stats['play']['queue_wait_time']:.3f}s")
-        print(f"  • 首句延迟 (TTFP): {timing_stats['play']['ttfp']:.3f}s")
+        print(f"  • 首句延迟 (TTFP,含ASR): {asr_duration + timing_stats['play']['ttfp']:.3f}s")
         print(f"  • 总耗时:          {total_duration:.3f}s")
 
         # 计算并发效率
@@ -368,6 +372,7 @@ class VoicePipeline:
 
         def play_worker():
             first = True
+            prebuffer = []
             try:
                 timing_stats['play']['start'] = time.perf_counter()
                 while True:
@@ -377,11 +382,33 @@ class VoicePipeline:
                     if item is _SENTINEL:
                         break
                     if first:
+                        prebuffer.append(item)
+                        if len(prebuffer) < _INITIAL_PLAY_BUFFER_CHUNKS:
+                            continue
                         timing_stats['play']['ttfp'] = time.perf_counter() - timing_stats['llm']['start']
                         print(f"🔊 首句播放开始")
                         first = False
+                        while prebuffer:
+                            buffered_item = prebuffer.pop(0)
+                            self.audio_player.play_bytes(buffered_item, blocking=True)
+                            timing_stats['play']['chunks_played'] += 1
+                            time.sleep(_INTER_CHUNK_GAP_SEC)
+                        continue
                     self.audio_player.play_bytes(item, blocking=True)
                     timing_stats['play']['chunks_played'] += 1
+                    time.sleep(_INTER_CHUNK_GAP_SEC)
+
+                # 若总分片不足预缓冲阈值（例如只有1句），补播缓存内容
+                if prebuffer:
+                    if first:
+                        timing_stats['play']['ttfp'] = time.perf_counter() - timing_stats['llm']['start']
+                        print(f"🔊 首句播放开始")
+                    while prebuffer:
+                        buffered_item = prebuffer.pop(0)
+                        self.audio_player.play_bytes(buffered_item, blocking=True)
+                        timing_stats['play']['chunks_played'] += 1
+                        time.sleep(_INTER_CHUNK_GAP_SEC)
+
                 timing_stats['play']['end'] = time.perf_counter()
                 timing_stats['play']['duration'] = timing_stats['play']['end'] - timing_stats['play']['start']
             except Exception as e:

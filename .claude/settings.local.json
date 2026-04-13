@@ -3,7 +3,9 @@
     "allow": [
       "Bash(find . -name \"*.py\" -exec grep -l \"import\\\\|from\" {} \\\\;)",
       "Bash(python:*)",
-      "Bash(xargs wc:*)"
+      "Bash(xargs wc:*)",
+      "Bash(git:*)",
+      "Bash(powershell:*)"
     ]
   }
 }
