@@ -86,17 +86,20 @@ class VoicePipeline:
 
     def process_audio(self, audio_path: Path) -> None:
         t0 = time.perf_counter()
-        print("\n" + "=" * 60)
-        print("🎙️ 语音助手处理开始（流水线模式）")
-        print("=" * 60)
+        print("\n" + "=" * 70)
+        print("🎙️  ZhiXia 语音助手 - 流水线处理")
+        print("=" * 70)
 
         # 1. ASR
+        print("\n[阶段 1/3] 语音识别 (ASR)")
+        print("-" * 70)
         t_asr = time.perf_counter()
-        print("\n[1/3] 语音识别中...")
         asr_result = self.asr_engine.transcribe(audio_path)
         if not asr_result.text:
             raise RuntimeError("语音识别失败")
-        print(f"✅ 识别文本: {asr_result.text!r}  ({time.perf_counter()-t_asr:.2f}s)")
+        asr_duration = time.perf_counter() - t_asr
+        print(f"✅ 识别完成: \"{asr_result.text}\"")
+        print(f"⏱️  ASR 耗时: {asr_duration:.3f}s")
 
         # 2. RAG（可选）
         rag_context = None
@@ -104,12 +107,15 @@ class VoicePipeline:
             rag_context = self.rag_retriever.retrieve(asr_result.text, self.config.rag.top_k)
 
         # 3. LLM → TTS → Play 流水线
-        print("\n[2/3] AI 思考 + 语音合成（流水线）...")
-        full_text = self._run_streaming_pipeline(asr_result.text, rag_context)
+        print("\n[阶段 2/3] AI生成 + 语音合成 (流水线模式)")
+        print("-" * 70)
+        print("🔄 LLM Worker: 启动中...")
+        print("🔄 TTS Worker: 等待中...")
+        print("🔄 Play Worker: 等待中...")
+        full_text, timing_stats = self._run_streaming_pipeline(asr_result.text, rag_context)
 
         # 4. 解析最终输出（用于 display）
         structured = parse_llm_output(full_text)
-        print(f"\n✅ AI 完整回复: {structured.text!r}")
 
         # 更新 display：显示完整的 text 和最终的 emotion
         payload = DisplayPayload(
@@ -120,8 +126,44 @@ class VoicePipeline:
         )
         self.display.show(payload)
 
-        print(f"\n⏱️  总耗时: {time.perf_counter()-t0:.2f}s")
-        print("=" * 60)
+        # 5. 详细统计信息显示
+        print("\n[阶段 3/3] 处理完成")
+        print("-" * 70)
+        print(f"📝 完整回复: \"{structured.text}\"")
+        print(f"😊 情感标签: {structured.emotion}")
+
+        total_duration = time.perf_counter() - t0
+        print("\n⏱️  性能统计 (详细模式):")
+        print(f"  • ASR 耗时:        {asr_duration:.3f}s")
+        print(f"  • LLM 生成:")
+        print(f"    - 总耗时:        {timing_stats['llm']['duration']:.3f}s")
+        print(f"    - 首token延迟:   {timing_stats['llm']['first_token_time']:.3f}s")
+        print(f"    - 生成tokens:    {timing_stats['llm']['tokens']}")
+        if timing_stats['llm']['tokens_per_sec'] > 0:
+            print(f"    - 生成速度:      {timing_stats['llm']['tokens_per_sec']:.1f} tokens/s")
+        print(f"  • TTS 合成:")
+        print(f"    - 总耗时:        {timing_stats['tts']['duration']:.3f}s")
+        print(f"    - 合成句数:      {timing_stats['tts']['chunks']}")
+        if timing_stats['tts']['avg_chunk_time'] > 0:
+            print(f"    - 平均每句:      {timing_stats['tts']['avg_chunk_time']:.3f}s")
+        if timing_stats['tts']['first_chunk_time'] > 0:
+            print(f"    - 首句合成:      {timing_stats['tts']['first_chunk_time']:.3f}s")
+        print(f"    - 队列等待:      {timing_stats['tts']['queue_wait_time']:.3f}s")
+        print(f"  • 音频播放:")
+        print(f"    - 总耗时:        {timing_stats['play']['duration']:.3f}s")
+        print(f"    - 播放片段:      {timing_stats['play']['chunks_played']}")
+        print(f"    - 队列等待:      {timing_stats['play']['queue_wait_time']:.3f}s")
+        print(f"  • 首句延迟 (TTFP): {timing_stats['play']['ttfp']:.3f}s")
+        print(f"  • 总耗时:          {total_duration:.3f}s")
+
+        # 计算并发效率
+        sum_durations = (asr_duration + timing_stats['llm']['duration'] +
+                        timing_stats['tts']['duration'] + timing_stats['play']['duration'])
+        if total_duration > 0:
+            efficiency = (sum_durations / total_duration) * 100
+            print(f"  • 并发效率:        {efficiency:.1f}%")
+
+        print("=" * 70)
 
     # ------------------------------------------------------------------
     # 流水线核心
@@ -141,20 +183,46 @@ class VoicePipeline:
         full_output_holder: list[str] = []
         errors: list[Exception] = []
 
+        # 详细计时统计
+        timing_stats = {
+            'llm': {
+                'start': 0, 'end': 0, 'duration': 0,
+                'tokens': 0, 'first_token_time': 0,
+                'tokens_per_sec': 0
+            },
+            'tts': {
+                'start': 0, 'end': 0, 'duration': 0,
+                'chunks': 0, 'avg_chunk_time': 0,
+                'first_chunk_time': 0, 'queue_wait_time': 0,
+                'chunk_times': []
+            },
+            'play': {
+                'start': 0, 'end': 0, 'duration': 0,
+                'ttfp': 0, 'chunks_played': 0,
+                'queue_wait_time': 0
+            }
+        }
+
         messages = self._build_messages(user_text, rag_context)
         # 如果启用了结构化输出，禁用分句（避免破坏 JSON 格式）
         enable_sentence_split = not self.config.llm.enable_structured_output
 
         def llm_worker():
             try:
+                timing_stats['llm']['start'] = time.perf_counter()
                 buffer = ""
                 raw_chunks = []
                 emotion_shown = False  # 标记 emotion 是否已显示
+                first_token = True
                 # 结构化输出流式状态
                 in_text_value = False   # 是否正在接收 "text" 值内容
                 text_buf = ""           # text 值的流式缓冲区
                 sent_chars = 0          # 已送入 TTS 的字符数
                 for token in self.llm_engine.stream_chat(messages, self.config.llm.max_new_tokens):
+                    if first_token:
+                        timing_stats['llm']['first_token_time'] = time.perf_counter() - timing_stats['llm']['start']
+                        print("✅ LLM Worker: 首个token已生成")
+                        first_token = False
                     raw_chunks.append(token)
                     buffer += token
 
@@ -254,6 +322,11 @@ class VoicePipeline:
                         tts_queue.put(clean)
 
                 full_output_holder.append("".join(raw_chunks))
+                timing_stats['llm']['end'] = time.perf_counter()
+                timing_stats['llm']['duration'] = timing_stats['llm']['end'] - timing_stats['llm']['start']
+                timing_stats['llm']['tokens'] = len(raw_chunks)
+                if timing_stats['llm']['duration'] > 0:
+                    timing_stats['llm']['tokens_per_sec'] = timing_stats['llm']['tokens'] / timing_stats['llm']['duration']
             except Exception as e:
                 logger.exception("LLM worker 异常")
                 errors.append(e)
@@ -262,16 +335,31 @@ class VoicePipeline:
 
         def tts_worker():
             try:
+                timing_stats['tts']['start'] = time.perf_counter()
+                first_chunk = True
                 while True:
+                    t_wait_start = time.perf_counter()
                     item = tts_queue.get()
+                    timing_stats['tts']['queue_wait_time'] += time.perf_counter() - t_wait_start
                     if item is _SENTINEL:
                         break
                     # item 已经是纯文本（由 llm_worker 提取），直接合成
                     t = time.perf_counter()
                     wav = self.tts_engine.synthesize_to_bytes(item)
-                    logger.debug("TTS 合成 %.2fs: %s", time.perf_counter() - t, item[:30])
+                    chunk_time = time.perf_counter() - t
+                    timing_stats['tts']['chunk_times'].append(chunk_time)
+                    timing_stats['tts']['chunks'] += 1
+                    if first_chunk:
+                        timing_stats['tts']['first_chunk_time'] = chunk_time
+                        print("✅ TTS Worker: 首句合成完成")
+                        first_chunk = False
+                    logger.debug("TTS 合成 %.2fs: %s", chunk_time, item[:30])
                     if wav:
                         play_queue.put(wav)
+                timing_stats['tts']['end'] = time.perf_counter()
+                timing_stats['tts']['duration'] = timing_stats['tts']['end'] - timing_stats['tts']['start']
+                if timing_stats['tts']['chunks'] > 0:
+                    timing_stats['tts']['avg_chunk_time'] = sum(timing_stats['tts']['chunk_times']) / timing_stats['tts']['chunks']
             except Exception as e:
                 logger.exception("TTS worker 异常")
                 errors.append(e)
@@ -281,14 +369,21 @@ class VoicePipeline:
         def play_worker():
             first = True
             try:
+                timing_stats['play']['start'] = time.perf_counter()
                 while True:
+                    t_wait_start = time.perf_counter()
                     item = play_queue.get()
+                    timing_stats['play']['queue_wait_time'] += time.perf_counter() - t_wait_start
                     if item is _SENTINEL:
                         break
                     if first:
+                        timing_stats['play']['ttfp'] = time.perf_counter() - timing_stats['llm']['start']
                         print(f"🔊 首句播放开始")
                         first = False
                     self.audio_player.play_bytes(item, blocking=True)
+                    timing_stats['play']['chunks_played'] += 1
+                timing_stats['play']['end'] = time.perf_counter()
+                timing_stats['play']['duration'] = timing_stats['play']['end'] - timing_stats['play']['start']
             except Exception as e:
                 logger.exception("Play worker 异常")
                 errors.append(e)
@@ -308,7 +403,7 @@ class VoicePipeline:
         if errors:
             raise errors[0]
 
-        return full_output_holder[0] if full_output_holder else ""
+        return full_output_holder[0] if full_output_holder else "", timing_stats
 
     # ------------------------------------------------------------------
     # 消息构建

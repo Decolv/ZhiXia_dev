@@ -29,7 +29,9 @@ class _FallbackLLM:
 
     def stream_chat(self, _messages, max_new_tokens: int = 32):
         del max_new_tokens
-        yield self._text
+        # 模拟流式输出：逐字符yield
+        for char in self._text:
+            yield char
 
     def set_chat_template(self, system_prompt: str = "", prompt_prefix: str = "", prompt_postfix: str = "") -> None:
         del system_prompt, prompt_prefix, prompt_postfix
@@ -74,7 +76,11 @@ class RKLLMEngine(LLMEngine):
             if not allow_fallback:
                 raise
             logger.warning("RKLLM 不可用，启用 PC 测试回退 LLM: %s", exc)
-            self._llm = _FallbackLLM("这是PC测试模式回复：RKLLM在当前系统不可用，已切换回退模型。")
+            self._llm = _FallbackLLM(
+                "今天天气不错，适合出门散步。最近气温回升，春天的气息越来越浓了！"
+                "对了，你有什么计划吗？我建议可以去公园走走，呼吸一下新鲜空气。"
+                "如果想了解更多信息，随时可以问我哦。"
+            )
 
     def chat(self, messages: List[LLMMessage], max_new_tokens: int = 32) -> str:
         self._ensure_model()

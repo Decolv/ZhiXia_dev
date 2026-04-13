@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(find . -name \"*.py\" -exec grep -l \"import\\\\|from\" {} \\\\;)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(xargs wc:*)"
     ]
   }
 }
