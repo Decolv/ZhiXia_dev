@@ -43,8 +43,8 @@
   "wakeword": {
     "enabled": true,
     "engine": "snowboy",
-    "model_paths": ["models/snowboy/zhixia.umdl"],
-    "keyword_names": ["知匣"],
+    "model_paths": ["models/snowboy/xiaoxia.umdl"],
+    "keyword_names": ["小匣"],
     "sensitivity": 0.5,
     "audio_gain": 1.0,
     "apply_frontend": false,
