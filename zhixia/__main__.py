@@ -110,13 +110,41 @@ def main():
         display=display,
     )
 
-    # 获取输入音频路径
-    input_audio = Path(settings.asr.input_audio) if settings.asr.input_audio else None
-    if not input_audio or not input_audio.exists():
-        logger.error(f"输入音频文件不存在: {input_audio}")
-        print(f"\n❌ 输入音频文件不存在: {input_audio}")
-        print("请在 localconfig.json 中配置 asr.input_audio")
-        sys.exit(1)
+    # 获取输入音频路径（录音模式 or 文件模式）
+    input_audio: Path | None = None
+    if settings.asr.enable_recording:
+        # 录音模式
+        from zhixia.audio.recorder import AudioRecorder
+        recorder = AudioRecorder(sample_rate=settings.asr.record_sample_rate)
+        try:
+            recorder.ensure_input_device()
+        except RuntimeError as e:
+            logger.error("未检测到麦克风: %s", e)
+            print(f"\n❌ 未检测到可用麦克风输入设备")
+            print("请检查音频设备连接，或在配置中关闭录音模式 (asr.enable_recording=false)")
+            sys.exit(1)
+
+        output_dir = Path(settings.audio.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        input_audio = output_dir / "recorded_input.wav"
+
+        duration = settings.asr.record_duration
+        print(f"\n🎤 录音模式: 请在 {duration:.0f} 秒内说话...")
+        try:
+            recorder.record_to_wav(duration, input_audio)
+            print(f"✅ 录音完成: {input_audio}")
+        except Exception as e:
+            logger.exception("录音失败")
+            print(f"\n❌ 录音失败: {e}")
+            sys.exit(1)
+    else:
+        # 文件模式
+        input_audio = Path(settings.asr.input_audio) if settings.asr.input_audio else None
+        if not input_audio or not input_audio.exists():
+            logger.error(f"输入音频文件不存在: {input_audio}")
+            print(f"\n❌ 输入音频文件不存在: {input_audio}")
+            print("请在 localconfig.json 中配置 asr.input_audio，或开启录音模式 (asr.enable_recording=true)")
+            sys.exit(1)
 
     # 处理音频
     try:

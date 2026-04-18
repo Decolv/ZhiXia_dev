@@ -15,6 +15,9 @@ class ASRConfig:
     whisper_compute_type: str = "int8"
     language: str = "zh"
     input_audio: str = ""
+    enable_recording: bool = False
+    record_duration: float = 5.0
+    record_sample_rate: int = 16000
 
 
 @dataclass
