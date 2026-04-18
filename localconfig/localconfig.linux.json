@@ -40,6 +40,17 @@
     "npu_enabled": true,
     "memory_optimization": true
   },
+  "wakeword": {
+    "enabled": false,
+    "engine": "snowboy",
+    "model_paths": ["models/snowboy/zhixia.umdl"],
+    "keyword_names": ["知匣"],
+    "sensitivity": 0.5,
+    "audio_gain": 1.0,
+    "apply_frontend": false,
+    "record_duration": 5.0,
+    "wake_sound": "ding"
+  },
   "logging": {
     "level": "INFO",
     "enable_debug": false

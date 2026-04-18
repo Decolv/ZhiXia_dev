@@ -60,6 +60,19 @@ class DisplayConfig:
 
 
 @dataclass
+class WakeWordConfig:
+    enabled: bool = False
+    engine: str = "snowboy"
+    model_paths: list[str] = field(default_factory=list)
+    keyword_names: list[str] = field(default_factory=lambda: ["zhixia"])
+    sensitivity: float = 0.5
+    audio_gain: float = 1.0
+    apply_frontend: bool = False
+    record_duration: float = 5.0
+    wake_sound: str = "ding"  # "ding" | "tts" | "none"
+
+
+@dataclass
 class AppSettings:
     asr: ASRConfig = field(default_factory=ASRConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
@@ -67,6 +80,7 @@ class AppSettings:
     tts: TTSConfig = field(default_factory=TTSConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
     display: DisplayConfig = field(default_factory=DisplayConfig)
+    wakeword: WakeWordConfig = field(default_factory=WakeWordConfig)
     log_level: str = "INFO"
 
     project_root: Path = field(default_factory=lambda: Path(__file__).resolve().parent.parent.parent)

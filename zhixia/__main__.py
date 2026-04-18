@@ -2,12 +2,16 @@
 
 import logging
 import os
+import signal
 import sys
+import threading
+import time
 from pathlib import Path
 
 from zhixia.asr.funasr_engine import FunASREngine
 from zhixia.asr.whisper_engine import WhisperASREngine
 from zhixia.audio.player import ALSAAudioPlayer
+from zhixia.audio.recorder import AudioRecorder
 from zhixia.config.settings import AppSettings
 from zhixia.display.null_display import NullDisplay
 from zhixia.llm.rkllm_engine import RKLLMEngine
@@ -52,6 +56,149 @@ def create_display(config):
     return NullDisplay()
 
 
+def create_wakeword_engine(config, project_root: Path):
+    """创建唤醒词引擎。"""
+    if not getattr(config, "wakeword", None) or not config.wakeword.enabled:
+        return None
+
+    if config.wakeword.engine == "snowboy":
+        from zhixia.wakeword.snowboy_engine import SnowboyWakeWordEngine
+
+        engine = SnowboyWakeWordEngine(config.wakeword, project_root)
+        if not engine.is_available():
+            logger.error("Snowboy 不可用。安装方式:")
+            logger.error("  pip install snowboy")
+            logger.error("  或: pip install git+https://github.com/seasalt-ai/snowboy.git")
+            return None
+        return engine
+
+    logger.error("未知的唤醒词引擎: %s", config.wakeword.engine)
+    return None
+
+
+class WakeWordLoop:
+    """唤醒词监听 + 语音交互主循环。
+
+    流程：
+        启动 → 加载唤醒词模型 → 开始监听
+        检测到唤醒词 → 停止监听 → 播放提示音 → 录音 → Pipeline处理 → 回到监听
+    """
+
+    def __init__(
+        self,
+        config: AppSettings,
+        wakeword_engine,
+        pipeline: VoicePipeline,
+        recorder: AudioRecorder,
+        player: ALSAAudioPlayer,
+    ) -> None:
+        self.config = config
+        self.wakeword = wakeword_engine
+        self.pipeline = pipeline
+        self.recorder = recorder
+        self.player = player
+
+        self._shutdown = threading.Event()
+        self._output_dir = Path(config.audio.output_dir)
+        self._output_dir.mkdir(parents=True, exist_ok=True)
+
+        # 预合成提示音路径
+        self._ding_wav = _PROJECT_ROOT / "assets" / "ding.wav"
+
+    def _play_wake_sound(self) -> None:
+        """播放唤醒提示音。"""
+        wake_sound = getattr(self.config.wakeword, "wake_sound", "ding")
+
+        if wake_sound == "none":
+            return
+
+        if wake_sound == "ding" and self._ding_wav.exists():
+            self.player.play(self._ding_wav, blocking=True)
+            return
+
+        if wake_sound == "tts":
+            try:
+                wav = self.pipeline.tts_engine.synthesize_to_bytes("我在")
+                if wav:
+                    self.player.play_bytes(wav, blocking=True)
+                    return
+            except Exception:
+                logger.exception("TTS 提示音合成失败")
+
+        # 回退：静默（不播放提示音）
+        logger.debug("无可用提示音")
+
+    def _on_wake(self, result) -> None:
+        """唤醒词检测回调。"""
+        print(f"\n🔔 唤醒词检测: {result.keyword_name}")
+
+    def _record_and_process(self) -> None:
+        """录音并走 Pipeline 处理。"""
+        input_audio = self._output_dir / "recorded_input.wav"
+        duration = self.config.wakeword.record_duration
+
+        print(f"\n🎤 请说话 ({duration:.0f} 秒)...")
+        try:
+            self.recorder.record_to_wav(duration, input_audio)
+            print("✅ 录音完成")
+        except Exception as exc:
+            logger.exception("录音失败")
+            print(f"\n❌ 录音失败: {exc}")
+            return
+
+        try:
+            self.pipeline.process_audio(input_audio)
+        except Exception as exc:
+            logger.exception("Pipeline 处理失败")
+            print(f"\n❌ 处理失败: {exc}")
+
+    def run(self) -> None:
+        """主循环。"""
+        print("\n" + "=" * 70)
+        print("🎙️  ZhiXia 语音助手 - 唤醒词模式")
+        print("=" * 70)
+        print(f"唤醒词引擎: {self.wakeword.name}")
+        print("按 Ctrl+C 退出")
+        print("-" * 70)
+
+        if not self.wakeword.load_models():
+            print("❌ 唤醒词模型加载失败")
+            sys.exit(1)
+
+        while not self._shutdown.is_set():
+            print("\n👂 正在监听唤醒词...")
+            try:
+                self.wakeword.start_listening(
+                    on_wake=self._on_wake,
+                    interrupt_check=lambda: self._shutdown.is_set(),
+                )
+            except Exception as exc:
+                logger.exception("监听异常")
+                print(f"\n❌ 监听异常: {exc}")
+                time.sleep(1)
+                continue
+
+            if self._shutdown.is_set():
+                break
+
+            # 检测到唤醒词，播放提示音
+            self._play_wake_sound()
+
+            # 录音 + Pipeline 处理
+            self._record_and_process()
+
+            # 短暂停顿后回到监听
+            time.sleep(0.5)
+
+        print("\n👋 已退出唤醒词模式")
+
+    def stop(self) -> None:
+        """请求停止循环。"""
+        print("\n🛑 正在停止...")
+        self._shutdown.set()
+        self.wakeword.stop_listening()
+
+
 def main():
     logger = logging.getLogger(__name__)
 
@@ -73,6 +220,7 @@ def main():
     device_config = getattr(settings, "device", None)
     if isinstance(device_config, dict) and device_config.get("memory_optimization"):
         from zhixia.utils.memory import check_memory
+
         mem_available = check_memory()
         if mem_available and mem_available < 2.0:
             logger.warning(f"可用内存不足: {mem_available:.2f} GB")
@@ -87,6 +235,7 @@ def main():
 
     # 预热：提前加载模型，消除首次请求冷启动
     import time
+
     print("⏳ 预热模型中...")
     t0 = time.perf_counter()
     try:
@@ -97,7 +246,7 @@ def main():
         tts._ensure_voice()
     except Exception:
         pass
-    print(f"✅ 模型预热完成 ({time.perf_counter()-t0:.2f}s)")
+    print(f"✅ 模型预热完成 ({time.perf_counter() - t0:.2f}s)")
 
     # 创建管线
     pipeline = VoicePipeline(
@@ -110,49 +259,84 @@ def main():
         display=display,
     )
 
-    # 获取输入音频路径（录音模式 or 文件模式）
-    input_audio: Path | None = None
-    if settings.asr.enable_recording:
-        # 录音模式
-        from zhixia.audio.recorder import AudioRecorder
+    # 判断运行模式
+    wakeword_engine = create_wakeword_engine(settings, _PROJECT_ROOT)
+
+    if wakeword_engine is not None:
+        # ===== 唤醒词模式 =====
         recorder = AudioRecorder(sample_rate=settings.asr.record_sample_rate)
         try:
             recorder.ensure_input_device()
-        except RuntimeError as e:
-            logger.error("未检测到麦克风: %s", e)
-            print(f"\n❌ 未检测到可用麦克风输入设备")
-            print("请检查音频设备连接，或在配置中关闭录音模式 (asr.enable_recording=false)")
+        except RuntimeError as exc:
+            logger.error("未检测到麦克风: %s", exc)
+            print("\n❌ 未检测到可用麦克风输入设备")
             sys.exit(1)
 
-        output_dir = Path(settings.audio.output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        input_audio = output_dir / "recorded_input.wav"
+        loop = WakeWordLoop(
+            config=settings,
+            wakeword_engine=wakeword_engine,
+            pipeline=pipeline,
+            recorder=recorder,
+            player=player,
+        )
 
-        duration = settings.asr.record_duration
-        print(f"\n🎤 录音模式: 请在 {duration:.0f} 秒内说话...")
+        def _signal_handler(_signum, _frame):
+            loop.stop()
+
+        signal.signal(signal.SIGINT, _signal_handler)
+        if hasattr(signal, "SIGTERM"):
+            signal.signal(signal.SIGTERM, _signal_handler)
+
         try:
-            recorder.record_to_wav(duration, input_audio)
-            print(f"✅ 录音完成: {input_audio}")
-        except Exception as e:
-            logger.exception("录音失败")
-            print(f"\n❌ 录音失败: {e}")
-            sys.exit(1)
-    else:
-        # 文件模式
-        input_audio = Path(settings.asr.input_audio) if settings.asr.input_audio else None
-        if not input_audio or not input_audio.exists():
-            logger.error(f"输入音频文件不存在: {input_audio}")
-            print(f"\n❌ 输入音频文件不存在: {input_audio}")
-            print("请在 localconfig.json 中配置 asr.input_audio，或开启录音模式 (asr.enable_recording=true)")
-            sys.exit(1)
+            loop.run()
+        except KeyboardInterrupt:
+            loop.stop()
+        finally:
+            wakeword_engine.shutdown()
 
-    # 处理音频
-    try:
-        pipeline.process_audio(input_audio)
-    except Exception as e:
-        logger.exception("管线处理失败")
-        print(f"\n❌ 处理失败: {e}")
-        sys.exit(1)
+    else:
+        # ===== 单次运行模式（录音 or 文件）=====
+        input_audio: Path | None = None
+        if settings.asr.enable_recording:
+            # 录音模式
+            recorder = AudioRecorder(sample_rate=settings.asr.record_sample_rate)
+            try:
+                recorder.ensure_input_device()
+            except RuntimeError as exc:
+                logger.error("未检测到麦克风: %s", exc)
+                print("\n❌ 未检测到可用麦克风输入设备")
+                print("请检查音频设备连接，或在配置中关闭录音模式 (asr.enable_recording=false)")
+                sys.exit(1)
+
+            output_dir = Path(settings.audio.output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            input_audio = output_dir / "recorded_input.wav"
+
+            duration = settings.asr.record_duration
+            print(f"\n🎤 录音模式: 请在 {duration:.0f} 秒内说话...")
+            try:
+                recorder.record_to_wav(duration, input_audio)
+                print(f"✅ 录音完成: {input_audio}")
+            except Exception as exc:
+                logger.exception("录音失败")
+                print(f"\n❌ 录音失败: {exc}")
+                sys.exit(1)
+        else:
+            # 文件模式
+            input_audio = Path(settings.asr.input_audio) if settings.asr.input_audio else None
+            if not input_audio or not input_audio.exists():
+                logger.error("输入音频文件不存在: %s", input_audio)
+                print(f"\n❌ 输入音频文件不存在: {input_audio}")
+                print("请在 localconfig.json 中配置 asr.input_audio，或开启录音模式 (asr.enable_recording=true)")
+                sys.exit(1)
+
+        # 处理音频
+        try:
+            pipeline.process_audio(input_audio)
+        except Exception as exc:
+            logger.exception("管线处理失败")
+            print(f"\n❌ 处理失败: {exc}")
+            sys.exit(1)
 
 
 if __name__ == "__main__":
