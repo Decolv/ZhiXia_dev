@@ -82,6 +82,7 @@ class AppSettings:
     display: DisplayConfig = field(default_factory=DisplayConfig)
     wakeword: WakeWordConfig = field(default_factory=WakeWordConfig)
     log_level: str = "INFO"
+    skip_warmup: bool = False
 
     project_root: Path = field(default_factory=lambda: Path(__file__).resolve().parent.parent.parent)
     config_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parent.parent.parent / "localconfig")

@@ -233,20 +233,44 @@ def main():
     rag = create_rag_retriever(settings)
     display = create_display(settings.display)
 
-    # 预热：提前加载模型，消除首次请求冷启动
-    import time
+    # 预热：提前加载模型并执行一次真实推理，消除首次请求冷启动
+    if not settings.skip_warmup:
+        import time
 
-    print("⏳ 预热模型中...")
-    t0 = time.perf_counter()
-    try:
-        llm._ensure_model()
-    except Exception:
-        pass
-    try:
-        tts._ensure_voice()
-    except Exception:
-        pass
-    print(f"✅ 模型预热完成 ({time.perf_counter() - t0:.2f}s)")
+        print("⏳ 预热模型中...")
+        t0 = time.perf_counter()
+
+        # ASR: 加载模型到内存（不跑推理，保留流式扩展性）
+        try:
+            if hasattr(asr, "_ensure_model"):
+                asr._ensure_model()
+                print(f"  ASR 模型加载完成 ({time.perf_counter() - t0:.2f}s)")
+        except Exception:
+            pass
+
+        # LLM: 加载模型 + 一次短推理完成缓存预热
+        try:
+            llm._ensure_model()
+            t1 = time.perf_counter()
+            # 极短 prompt 只生成 1~2 个 token，避免长回复耗时
+            from zhixia.llm.base import LLMMessage
+            list(llm.stream_chat([LLMMessage(role="user", content="只回复一个'好的'")]))
+            print(f"  LLM 预热完成 ({time.perf_counter() - t1:.2f}s)")
+        except Exception:
+            pass
+
+        # TTS: 加载模型 + 一次短合成完成 ONNX session 预热
+        try:
+            tts._ensure_voice()
+            t2 = time.perf_counter()
+            tts.synthesize_to_bytes("预热")
+            print(f"  TTS 预热完成 ({time.perf_counter() - t2:.2f}s)")
+        except Exception:
+            pass
+
+        print(f"✅ 全部预热完成 ({time.perf_counter() - t0:.2f}s)")
+    else:
+        print("⏩ 已跳过预热（skip_warmup=true）")
 
     # 创建管线
     pipeline = VoicePipeline(
