@@ -22,6 +22,7 @@ from zhixia.display.base import DisplayOutput, DisplayPayload
 from zhixia.llm.base import LLMEngine, LLMMessage, StructuredOutput
 from zhixia.llm.output_parser import _strip_thinking_tokens, get_format_instruction, parse_llm_output
 from zhixia.llm.rag.base import RAGContext, RAGRetriever
+from zhixia.memory.conversation_memory import ConversationMemory
 from zhixia.tts.base import TTSEngine
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,8 @@ class VoicePipeline:
         else:
             self.display = display
 
+        self.conversation_memory = ConversationMemory()
+
     # ------------------------------------------------------------------
     # 公共入口
     # ------------------------------------------------------------------
@@ -129,6 +132,11 @@ class VoicePipeline:
             metadata=structured.metadata,
         )
         self.display.show(payload)
+
+        # 保存到对话记忆
+        if self.config.llm.memory_enabled:
+            self.conversation_memory.add_message("user", asr_result.text)
+            self.conversation_memory.add_message("assistant", structured.text)
 
         # 5. 详细统计信息显示
         print("\n[阶段 3/3] 处理完成")
@@ -439,7 +447,6 @@ class VoicePipeline:
     def _build_messages(self, user_text: str, rag_context: Optional[RAGContext]) -> list[LLMMessage]:
         messages = []
         system_prompt = self.config.llm.system_prompt
-        # 低延迟场景：关闭结构化输出（避免 LLM 生成 JSON 包装）
         if self.config.llm.enable_structured_output:
             system_prompt = system_prompt + get_format_instruction()
         messages.append(LLMMessage(role="system", content=system_prompt))
@@ -450,6 +457,14 @@ class VoicePipeline:
                 role="system",
                 content=f"参考信息:\n{context_block}\n请基于以上参考信息回答用户问题。",
             ))
+
+        if self.config.llm.memory_enabled:
+            history = self.conversation_memory.get_history(
+                max_rounds=self.config.llm.max_memory_rounds,
+                max_tokens=self.config.llm.max_memory_tokens,
+            )
+            for hist_msg in history:
+                messages.append(LLMMessage(role=hist_msg["role"], content=hist_msg["content"]))
 
         messages.append(LLMMessage(role="user", content=user_text))
         return messages

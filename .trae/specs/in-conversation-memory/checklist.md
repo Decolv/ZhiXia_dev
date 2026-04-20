@@ -1,0 +1,6 @@
+- [x] LLMConfig中包含memory_enabled、max_memory_rounds、max_memory_tokens配置
+- [x] ConversationMemory类能够存储和检索对话历史
+- [x] 消息构建时正确注入历史记忆上下文
+- [x] 记忆长度不超过max_memory_rounds配置
+- [x] 记忆部分token数不超过max_memory_tokens配置
+- [x] 多轮对话测试中小匣能正确引用前文信息

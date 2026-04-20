@@ -32,6 +32,9 @@ class LLMConfig:
     max_new_tokens: int = 256
     temperature: float = 1.0
     top_p: float = 0.95
+    memory_enabled: bool = True
+    max_memory_rounds: int = 5
+    max_memory_tokens: int = 512
     system_prompt: str = (
         "# 角色设定\n"
         "你是「小匣」，一个温暖有趣的智能助手。\n\n"
