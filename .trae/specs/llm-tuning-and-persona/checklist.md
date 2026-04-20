@@ -1,0 +1,7 @@
+- [x] max_new_tokens调整为256
+- [x] max_context_len调整为1024
+- [x] temperature调整为1.0
+- [x] system_prompt更新为小匣人设提示词
+- [x] 系统提示词包含小匣的名称、性格特点、回答风格
+- [x] 系统提示词语言与用户输入一致（中文）
+- [x] 配置修改后代码无语法错误

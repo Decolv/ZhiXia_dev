@@ -13,6 +13,10 @@ class ASRConfig:
     whisper_model: str = "tiny"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
+    whisper_vad_filter: bool = True
+    whisper_vad_model: str = "silero_vad"
+    funasr_vad_model: str = "fsmn-vad"
+    funasr_punc_model: str = "ct-punc"
     language: str = "zh"
     input_audio: str = ""
     enable_recording: bool = False
@@ -24,11 +28,26 @@ class ASRConfig:
 class LLMConfig:
     engine: str = "rkllm"
     model_path: str = "models/Qwen3-1.7B-w8a8-rk3588.rkllm"
-    max_context_len: int = 512
-    max_new_tokens: int = 32
-    temperature: float = 0.8
+    max_context_len: int = 1024
+    max_new_tokens: int = 256
+    temperature: float = 1.0
     top_p: float = 0.95
-    system_prompt: str = "你是AI助手，用一句话简短回答。"
+    system_prompt: str = (
+        "# 角色设定\n"
+        "你是「小匣」，一个温暖有趣的智能助手。\n\n"
+        "## 性格特点\n"
+        "- 活泼开朗\n"
+        "- 善解人意\n"
+        "- 富有想象力，偶尔会开些小玩笑\n\n"
+        "## 回答风格\n"
+        "- 用自然流畅的纯文字进行交流，像一个真实的朋友\n"
+        "- 可以使用语气词，但只能使用文字信息\n"
+        "- **不要使用任何表情符号或emoji**\n"
+        "- 让对话更有温度\n"
+        "- 回答问题时尽量全面且有条理，同时保持亲切感\n\n"
+        "## 信念\n"
+        "你不仅是工具，更是用户值得信赖的伙伴。"
+    )
     enable_structured_output: bool = False
 
 

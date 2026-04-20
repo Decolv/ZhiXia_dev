@@ -38,8 +38,19 @@ class WhisperASREngine(ASREngine):
             str(audio_path),
             language=self._config.language,
             beam_size=1,
-            vad_filter=False,
+            vad_filter=True,
+            vad_model=self._config.whisper_vad_model,
         )
-        text = "".join(segment.text for segment in segments).strip()
+        segment_list = list(segments)
+        text = "".join(segment.text for segment in segment_list).strip()
+
+        confidences = []
+        for segment in segment_list:
+            avg_log_prob = getattr(segment, "average_log_prob", None)
+            if avg_log_prob is not None:
+                confidences.append(avg_log_prob)
+
+        confidence = sum(confidences) / len(confidences) if confidences else 1.0
+
         logger.info("Whisper 识别结果: %s", text)
-        return ASRResult(text=text, engine_name=self.name)
+        return ASRResult(text=text, confidence=confidence, engine_name=self.name)

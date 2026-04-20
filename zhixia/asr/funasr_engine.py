@@ -29,8 +29,8 @@ class FunASREngine(ASREngine):
         try:
             self._model = AutoModel(
                 model=self._config.model,
-                vad_model=None,
-                punc_model=None,
+                vad_model=self._config.funasr_vad_model,
+                punc_model=self._config.funasr_punc_model,
                 disable_update=True,
                 hub="ms",
                 quantize=True,
@@ -40,8 +40,8 @@ class FunASREngine(ASREngine):
             logger.warning("INT8 量化模型加载失败，回退到标准版")
             self._model = AutoModel(
                 model=self._config.model,
-                vad_model=None,
-                punc_model=None,
+                vad_model=self._config.funasr_vad_model,
+                punc_model=self._config.funasr_punc_model,
                 disable_update=True,
                 hub="ms",
             )
@@ -51,8 +51,10 @@ class FunASREngine(ASREngine):
         self._ensure_model()
         result = self._model.generate(input=str(audio_path))
         text = ""
+        confidence = 1.0
         if result and len(result) > 0:
             text = result[0].get("text", "")
+            confidence = result[0].get("confidence", 1.0)
         text = text.strip()
         logger.info("ASR 识别结果: %s", text)
-        return ASRResult(text=text, engine_name=self.name)
+        return ASRResult(text=text, engine_name=self.name, confidence=confidence)

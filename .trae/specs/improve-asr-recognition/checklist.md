@@ -1,0 +1,8 @@
+- [x] ASRConfig中包含whisper_vad_filter、whisper_vad_model配置项
+- [x] ASRConfig中包含funasr_vad_model、funasr_punc_model配置项
+- [x] Whisper引擎transcribe方法使用vad_filter=True
+- [x] Whisper引擎transcribe方法正确传递vad_model参数
+- [x] Whisper引擎返回的ASRResult中包含合理的confidence值
+- [x] FunASR引擎加载时使用了VAD模型（非None）
+- [x] FunASR引擎加载时使用了标点模型（非None）
+- [x] FunASR引擎返回的ASRResult中包含confidence值
