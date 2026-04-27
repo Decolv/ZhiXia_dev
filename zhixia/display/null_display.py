@@ -1,6 +1,7 @@
 """空显示实现（日志输出，预留接口）"""
 
 import logging
+from typing import Any, Dict
 
 from zhixia.display.base import DisplayOutput, DisplayPayload
 
@@ -61,3 +62,11 @@ class NullDisplay(DisplayOutput):
     def force_eye_blink(self) -> None:
         """强制眼睛眨眼（空实现）。"""
         pass
+
+    def show_navigation_ui(self, nav_data: Dict[str, Any]) -> None:
+        """展示导航界面（空实现）。"""
+        logger.debug("Navigation UI shown: %s", nav_data.get("destination", "unknown"))
+
+    def hide_navigation_ui(self) -> None:
+        """隐藏导航界面（空实现）。"""
+        logger.debug("Navigation UI hidden")

@@ -163,6 +163,9 @@ class CampusNavigateTool(Tool):
         """使用LLM动态生成导航指引。"""
         from zhixia.llm.base import LLMMessage
 
+        # 查找匹配地点
+        matched_location = self._find_matching_location(query)
+
         # 构建系统提示词
         system_prompt = f"""你是湖南大学校园导航助手。请基于以下校园地点知识，为用户提供个性化的导航指引。
 
@@ -175,7 +178,6 @@ class CampusNavigateTool(Tool):
 3. 如果知识库中没有该地点信息，请诚实告知，并推荐相关地点
 4. 可以适当添加实用的出行小贴士（如最佳出行时间、注意事项等）
 5. 回答控制在200字以内，简洁明了但信息完整
-6. 如果有地图图片资源，请在回答末尾标注：[地图: xxx_map.png]
 """
 
         messages = [
@@ -194,7 +196,84 @@ class CampusNavigateTool(Tool):
         if self._callbacks:
             self._callbacks.on_agent_thought("campus_navigate", "导航指引生成完成")
 
+        # 如果有匹配的地点，通过回调传递导航数据
+        if matched_location and self._callbacks:
+            nav_data = self._build_nav_data(matched_location)
+            if hasattr(self._callbacks, 'on_nav_data_ready'):
+                self._callbacks.on_nav_data_ready("campus_navigate", nav_data)
+            # 存储在返回文本的元数据中
+            return f"__NAV_DATA__{matched_location}__\n\n{response.strip()}"
+
         return response.strip()
+
+    def _find_matching_location(self, query: str) -> Optional[str]:
+        """查找匹配地点名称。"""
+        query_lower = query.lower()
+        import re
+        location_names = re.findall(r'【(.*?)】', self.LOCATIONS_KNOWLEDGE)
+
+        for name in location_names:
+            if name in query or query in name:
+                return name
+
+        # 模糊匹配
+        for name in location_names:
+            if name.lower() in query_lower or query_lower in name.lower():
+                return name
+
+        # 关键词匹配
+        location_keywords = {
+            "岳麓书院": ["岳麓书院", "书院", "爱晚亭", "岳麓山"],
+            "复临舍": ["复临舍", "教学楼", "教室"],
+            "综合楼": ["综合楼", "新楼"],
+            "图书馆": ["图书馆", "借书", "自习"],
+            "一食堂": ["一食堂", "德智食堂"],
+            "二食堂": ["二食堂", "五食堂", "天马食堂"],
+            "德智学生公寓": ["德智", "德智公寓", "宿舍"],
+            "天马学生公寓": ["天马", "天马公寓", "宿舍"],
+            "东方红广场": ["东方红", "广场", "毛主席", "雕像"],
+            "校医院": ["校医院", "医院", "看病", "医务室"],
+            "体育场": ["体育场", "操场", "足球", "跑步"],
+            "研究生院": ["研究生院", "研究生"],
+        }
+
+        for name, keywords in location_keywords.items():
+            if any(kw in query_lower for kw in keywords):
+                return name
+
+        return None
+
+    def _build_nav_data(self, location_name: str) -> Dict[str, str]:
+        """构建导航数据结构。"""
+        import re
+        pattern = rf'【{location_name}】\n区域：(.*?)\n简介：(.*?)\n周边：(.*?)\n路线：(.*?)(?:\n|$)'
+        match = re.search(pattern, self.LOCATIONS_KNOWLEDGE)
+        if not match:
+            return {
+                "destination": location_name,
+                "area": "",
+                "description": "",
+                "route": "",
+                "nearby": "",
+                "walk_time": "",
+            }
+
+        area, description, nearby, route = match.groups()
+
+        # 提取步行时间
+        walk_time = ""
+        time_match = re.search(r'(\d+)分钟', route)
+        if time_match:
+            walk_time = f"约{time_match.group(1)}分钟"
+
+        return {
+            "destination": location_name,
+            "area": area.strip(),
+            "description": description.strip(),
+            "route": route.strip(),
+            "nearby": nearby.strip(),
+            "walk_time": walk_time,
+        }
 
     def _generate_fallback_response(self, query: str) -> str:
         """当LLM不可用时，基于关键词匹配生成简单回答。"""

@@ -16,7 +16,7 @@ import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from zhixia.agent.tool import ToolRegistry
 from zhixia.core.user_profile import UserProfile
@@ -24,6 +24,103 @@ from zhixia.display.base import DisplayOutput
 from zhixia.llm.rag.base import RAGContext, RAGRetriever
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# AgentConfigurator — Agent 配置接口
+# ---------------------------------------------------------------------------
+
+class AgentConfigurator:
+    """Agent 配置器接口。
+
+    卡片可通过此接口定义 Agent 类型和行为，实现不同卡片使用不同 Agent 策略。
+    例如：
+    - 新生助手卡 → ToolCallingAgent
+    - 复杂推理卡 → ReActAgent
+    - 简单问答卡 → 直接 LLM
+    """
+
+    def __init__(self) -> None:
+        self._agent_type: str = "react"  # 默认 ReAct
+        self._max_iterations: int = 5
+        self._early_stopping_method: str = "raise"
+        self._enabled_tools: Optional[List[str]] = None  # None=全部启用
+        self._custom_system_prompt: Optional[str] = None
+
+    def set_agent_type(self, agent_type: str) -> None:
+        """设置 Agent 类型: 'react', 'tool_calling', 'direct_llm'。"""
+        self._agent_type = agent_type
+
+    def set_max_iterations(self, max_iter: int) -> None:
+        """设置最大工具调用迭代次数。"""
+        self._max_iterations = max_iter
+
+    def set_early_stopping_method(self, method: str) -> None:
+        """设置提前停止方法: 'force', 'raise'。"""
+        self._early_stopping_method = method
+
+    def set_enabled_tools(self, tool_names: Optional[List[str]]) -> None:
+        """设置启用的工具列表，None 表示启用所有注册的工具。"""
+        self._enabled_tools = tool_names
+
+    def set_system_prompt(self, prompt: Optional[str]) -> None:
+        """设置自定义 system prompt（None 则使用 persona_holder）。"""
+        self._custom_system_prompt = prompt
+
+    def get_config(self) -> Dict[str, Any]:
+        """获取 Agent 配置。"""
+        return {
+            "agent_type": self._agent_type,
+            "max_iterations": self._max_iterations,
+            "early_stopping_method": self._early_stopping_method,
+            "enabled_tools": self._enabled_tools,
+            "custom_system_prompt": self._custom_system_prompt,
+        }
+
+    def clear(self) -> None:
+        """重置为默认配置。"""
+        self._agent_type = "react"
+        self._max_iterations = 5
+        self._early_stopping_method = "raise"
+        self._enabled_tools = None
+        self._custom_system_prompt = None
+
+
+# ---------------------------------------------------------------------------
+# ResponsePostProcessor — 响应后处理器接口
+# ---------------------------------------------------------------------------
+
+class ResponsePostProcessor(ABC):
+    """响应后处理器接口。
+
+    卡片可注册此处理器，在 AI 生成响应后执行自定义逻辑。
+    例如：
+    - 导航卡 → 解析 __NAV_DATA__ 并展示导航界面
+    - 音乐卡 → 解析音乐指令并播放
+    - 提醒卡 → 设置定时提醒
+
+    主机不关心具体处理逻辑，仅负责调用。
+    """
+
+    @abstractmethod
+    def process(self, response_text: str) -> Tuple[str, bool]:
+        """处理响应。
+
+        Args:
+            response_text: 原始响应文本
+
+        Returns:
+            (cleaned_text, is_handled)
+            - cleaned_text: 清理后的响应文本
+            - is_handled: 是否已处理（如果已处理，主机可能跳过默认显示）
+        """
+        ...
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """处理器名称，用于日志和注销。"""
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -101,11 +198,29 @@ class HostContext:
     # 显示输出（卡片可推送自定义显示内容）
     display: Optional[DisplayOutput] = None
 
+    # Agent 配置器（Skill 卡可自定义 Agent 类型和行为）
+    agent_configurator: AgentConfigurator = field(default_factory=AgentConfigurator)
+
+    # 响应后处理器列表（卡片可注册自定义响应处理逻辑）
+    response_processors: List[ResponsePostProcessor] = field(default_factory=list)
+
     # 主机配置
     config: Optional[Any] = None
 
     # 卡片根目录（卡片可读取自己的资源文件）
     card_root: Optional[Path] = None
+
+    def register_response_processor(self, processor: ResponsePostProcessor) -> None:
+        """注册响应后处理器。"""
+        self.response_processors.append(processor)
+        logger.info("响应后处理器已注册: %s", processor.name)
+
+    def unregister_response_processor(self, processor_name: str) -> None:
+        """注销响应后处理器。"""
+        self.response_processors = [
+            p for p in self.response_processors if p.name != processor_name
+        ]
+        logger.info("响应后处理器已注销: %s", processor_name)
 
     def __repr__(self) -> str:
         return (
@@ -289,6 +404,8 @@ class SkillCard(CardBase, ABC):
             def on_mount(self, host):
                 host.tool_registry.register(CampusMapTool())
                 host.persona_holder.set_overlay(self._load_persona(), self.name)
+                # 可选：配置 Agent 类型
+                host.agent_configurator.set_agent_type("tool_calling")
 
             def on_unmount(self, host):
                 host.tool_registry.unregister("campus_map")
