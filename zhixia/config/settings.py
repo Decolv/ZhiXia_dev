@@ -52,6 +52,11 @@ class LLMConfig:
         "你不仅是工具，更是用户值得信赖的伙伴。"
     )
     enable_structured_output: bool = False
+    # 云端LLM配置
+    enable_cloud_fallback: bool = False
+    cloud_api_url: str = "https://api.openai.com/v1/chat/completions"
+    cloud_api_key: str = ""
+    cloud_model_name: str = "gpt-3.5-turbo"
 
 
 @dataclass

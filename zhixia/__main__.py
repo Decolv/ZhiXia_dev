@@ -14,11 +14,13 @@ from zhixia.audio.player import ALSAAudioPlayer
 from zhixia.audio.recorder import AudioRecorder
 from zhixia.config.settings import AppSettings
 from zhixia.display.null_display import NullDisplay
+from zhixia.llm.cloud_engine import CloudLLMEngine
 from zhixia.llm.rkllm_engine import RKLLMEngine
 from zhixia.llm.rag.null_retriever import NullRAGRetriever
 from zhixia.pipeline.orchestrator import VoicePipeline
 from zhixia.tts.piper_engine import PiperTTSEngine
 from zhixia.utils.logging import setup_logging
+from zhixia.utils.network import is_online
 
 # 添加项目根目录到 sys.path（支持从 IDE 运行）
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -39,7 +41,21 @@ def create_asr_engine(config):
 
 
 def create_llm_engine(config):
-    return RKLLMEngine(config)
+    """创建LLM引擎，根据网络状态自动选择云端或本地"""
+    if config.enable_cloud_fallback:
+        online = is_online(use_cache=True)
+        if online:
+            logger = logging.getLogger(__name__)
+            logger.info("网络可用，使用云端LLM引擎")
+            print("🌐 使用云端大模型")
+            return CloudLLMEngine(config)
+        else:
+            logger = logging.getLogger(__name__)
+            logger.info("网络不可用，回退到本地LLM引擎")
+            print("📴 网络离线，使用本地模型")
+            return RKLLMEngine(config)
+    else:
+        return RKLLMEngine(config)
 
 
 def create_tts_engine(config):
