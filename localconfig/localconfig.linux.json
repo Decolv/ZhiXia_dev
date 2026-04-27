@@ -3,7 +3,7 @@
     "enabled": true,
     "engine": "funasr",
     "model": "iic/speech_paraformer_asr_nat-zh-cn-16k-common-vocab8358-tensorflow1",
-    "input_audio": "/home/quark/test.wav",
+    "input_audio": "",
     "language": "zh_CN",
     "enable_recording": false,
     "record_duration": 5.0,
@@ -13,7 +13,7 @@
     "enabled": true,
     "model_path": "models/Qwen3-1.7B-w8a8-rk3588.rkllm",
     "max_context_len": 512,
-    "max_new_tokens": 32,
+    "max_new_tokens": 128,
     "temperature": 0.8,
     "top_p": 0.95,
     "system_prompt": "你是AI助手，用一句话简短回答。/no_think"

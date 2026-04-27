@@ -1,0 +1,11 @@
+{
+    "name": "skill_template",
+    "display_name": "技能卡模板",
+    "version": "1.0.0",
+    "type": "skill",
+    "author": "ZhiXia Team",
+    "description": "Skill 卡最小可运行模板，展示自包含导入规范",
+    "entrypoint": "card.py",
+    "dependencies": [],
+    "min_host_version": "0.1.0"
+}

@@ -108,6 +108,32 @@ class AgentConfig:
 
 
 @dataclass
+class DeviceConfig:
+    platform: str = "rk3588"
+    npu_enabled: bool = True
+    memory_optimization: bool = True
+
+
+@dataclass
+class OutputConfig:
+    audio_path: str = "output/llm_response_piper.wav"
+    format: str = "wav"
+    sample_rate: int = 22050
+
+
+@dataclass
+class CacheConfig:
+    modelscope_cache: str = ".cache/modelscope"
+    enable_cache: bool = True
+
+
+@dataclass
+class LoggingConfig:
+    level: str = "INFO"
+    enable_debug: bool = False
+
+
+@dataclass
 class AppSettings:
     asr: ASRConfig = field(default_factory=ASRConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
@@ -117,6 +143,10 @@ class AppSettings:
     display: DisplayConfig = field(default_factory=DisplayConfig)
     wakeword: WakeWordConfig = field(default_factory=WakeWordConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
+    device: DeviceConfig = field(default_factory=DeviceConfig)
+    output: OutputConfig = field(default_factory=OutputConfig)
+    cache: CacheConfig = field(default_factory=CacheConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
     log_level: str = "INFO"
     skip_warmup: bool = False
 

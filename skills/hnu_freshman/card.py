@@ -11,15 +11,22 @@
 """
 
 import json
+import sys
 from pathlib import Path
 from typing import Optional
 
 from zhixia.agent.tool import ToolRegistry
 from zhixia.core.card_base import CardManifest, HostContext, SkillCard
 
-from skills.hnu_freshman.tools.campus_navigate import CampusNavigateTool
-from skills.hnu_freshman.tools.life_guide import CampusLifeGuideTool
-from skills.hnu_freshman.tools.major_query import MajorQueryTool
+# 自包含导入：确保卡片被复制到任意目录后，工具模块从卡片自身目录加载
+# 而非硬编码依赖项目源代码中的 skills/ 路径
+_CARD_ROOT = Path(__file__).parent.resolve()
+if str(_CARD_ROOT) not in sys.path:
+    sys.path.insert(0, str(_CARD_ROOT))
+
+from tools.campus_navigate import CampusNavigateTool
+from tools.life_guide import CampusLifeGuideTool
+from tools.major_query import MajorQueryTool
 
 
 class HNUFreshmanSkill(SkillCard):
@@ -67,7 +74,7 @@ class HNUFreshmanSkill(SkillCard):
 
         # 注册导航响应后处理器
         if host.display:
-            from skills.hnu_freshman.nav_processor import NavResponseProcessor
+            from nav_processor import NavResponseProcessor
             self._nav_processor = NavResponseProcessor(
                 display=host.display,
                 nav_data_provider=campus_navigate_tool,

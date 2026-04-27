@@ -21,6 +21,7 @@ from zhixia.config.settings import AppSettings
 from zhixia.display.base import DisplayOutput, DisplayPayload
 from zhixia.agent.executor import AgentExecutor
 from zhixia.agent.callbacks import CallbackManager, LoggingHandler, StreamingDisplayHandler
+from zhixia.agent.runnable import RunnableConfig
 from zhixia.llm.base import LLMEngine, LLMMessage, StructuredOutput
 from zhixia.llm.output_parser import _strip_thinking_tokens, get_format_instruction, parse_llm_output
 from zhixia.llm.rag.base import RAGContext, RAGRetriever

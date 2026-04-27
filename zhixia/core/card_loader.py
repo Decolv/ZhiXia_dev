@@ -284,6 +284,8 @@ class CardLoader:
 
         module_name = f"{self._module_prefix}_{slot_id}_{manifest.name}"
 
+        card_root_resolved = str(card_root.resolve())
+        path_inserted = False
         try:
             spec = importlib.util.spec_from_file_location(module_name, entry_file)
             if spec is None or spec.loader is None:
@@ -291,6 +293,13 @@ class CardLoader:
 
             module = importlib.util.module_from_spec(spec)
             sys.modules[module_name] = module
+
+            # 将卡片根目录加入 sys.path，支持卡片内基于目录的相对导入
+            if card_root_resolved not in sys.path:
+                sys.path.insert(0, card_root_resolved)
+                path_inserted = True
+                logger.debug("[%s] 已将卡片根目录加入 sys.path: %s", slot_id, card_root_resolved)
+
             spec.loader.exec_module(module)
 
             # 查找 Card 子类
@@ -299,6 +308,7 @@ class CardLoader:
                 logger.error("[%s] 未找到 Card 子类", slot_id)
                 return None
 
+            logger.info("[%s] 卡片模块已加载: %s (来自 %s)", slot_id, module_name, entry_file)
             return card_cls(manifest=manifest, card_root=card_root)
 
         except Exception as exc:
@@ -306,6 +316,10 @@ class CardLoader:
             if module_name in sys.modules:
                 del sys.modules[module_name]
             return None
+        finally:
+            if path_inserted and card_root_resolved in sys.path:
+                sys.path.remove(card_root_resolved)
+                logger.debug("[%s] 已从 sys.path 移除卡片根目录", slot_id)
 
     def _find_card_class(self, module) -> Optional[type]:
         """在模块中查找 CardBase 的子类。"""

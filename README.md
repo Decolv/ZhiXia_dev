@@ -47,7 +47,7 @@ ZhiXia（知匣）是一个为RK3588平台设计的离线智能语音助手项�
 
 ```bash
 # 克隆仓库
-git clone https://github.com/your-username/zhixia.git
+git clone https://github.com/Decolv/ZhiXia_dev.git
 cd zhixia
 
 # 安装基础依赖

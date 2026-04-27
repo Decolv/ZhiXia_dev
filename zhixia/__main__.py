@@ -4,6 +4,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -65,8 +66,8 @@ def create_asr_engine(config):
 
 def create_llm_engine(config):
     """创建LLM引擎，根据网络状态自动选择云端或本地"""
-    # config 是 AppSettings 对象，enable_cloud_fallback 在根级别
-    if getattr(config, "enable_cloud_fallback", False):
+    # config 是 AppSettings 对象，enable_cloud_fallback 在 llm 子配置中
+    if getattr(config.llm, "enable_cloud_fallback", False):
         online = is_online(use_cache=True)
         if online:
             logger = logging.getLogger(__name__)
@@ -306,8 +307,7 @@ def main():
     setup_logging(settings.log_level)
 
     # 检查内存（仅在 RK3588 上有意义）
-    device_config = getattr(settings, "device", None)
-    if isinstance(device_config, dict) and device_config.get("memory_optimization"):
+    if settings.device.memory_optimization:
         from zhixia.utils.memory import check_memory
 
         mem_available = check_memory()
