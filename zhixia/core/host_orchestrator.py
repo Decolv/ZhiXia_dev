@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from zhixia.agent import (
     AgentExecutor,
     AgentState,
+    BaseCallbackHandler,
     CallbackManager,
     LoggingHandler,
     ReActAgent,
@@ -52,6 +53,73 @@ from zhixia.memory.conversation_memory import ConversationMemory
 from zhixia.tts.base import TTSEngine
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# DisplayCallbackHandler — 支持思考播报的回调处理器
+# ---------------------------------------------------------------------------
+
+class DisplayCallbackHandler(BaseCallbackHandler):
+    """将Agent思考过程实时显示到Display的回调处理器。"""
+
+    def __init__(self, display: DisplayOutput) -> None:
+        self.display = display
+        self._current_run_id: Optional[str] = None
+
+    def on_thinking_start(self, run_id: str, **kwargs: Any) -> None:
+        """开始思考时更新显示。"""
+        self._current_run_id = run_id
+        self.display.update_thinking(True, "正在思考...")
+        self.display.show(DisplayPayload(
+            text="",
+            emotion="thinking",
+            is_thinking=True,
+            thinking_text="正在思考..."
+        ))
+        print("[思考] 开始分析问题...")
+
+    def on_thinking_end(self, run_id: str, **kwargs: Any) -> None:
+        """结束思考时更新显示。"""
+        self.display.update_thinking(False)
+        print("[思考] 分析完成")
+
+    def on_agent_thought(self, run_id: str, thought: str, **kwargs: Any) -> None:
+        """播报思考内容。"""
+        self.display.show(DisplayPayload(
+            text="",
+            emotion="thinking",
+            is_thinking=True,
+            thinking_text=thought
+        ))
+        print(f"[思考] {thought}")
+
+    def on_agent_action(self, run_id: str, action: Any, **kwargs: Any) -> None:
+        """播报工具调用。"""
+        from zhixia.agent.base import AgentAction
+
+        if isinstance(action, AgentAction):
+            action_text = f"正在调用 {action.tool} 工具..."
+            self.display.show(DisplayPayload(
+                text="",
+                emotion="working",
+                is_thinking=True,
+                thinking_text=action_text
+            ))
+            print(f"[工具] 调用 {action.tool}")
+
+    def on_agent_finish(self, run_id: str, finish: Any, **kwargs: Any) -> None:
+        """播报完成。"""
+        from zhixia.agent.base import AgentFinish
+
+        if isinstance(finish, AgentFinish):
+            text = finish.return_values.get("text", "")
+            self.display.show(DisplayPayload(
+                text=text,
+                emotion="neutral",
+                is_thinking=False,
+                thinking_text=""
+            ))
+
 
 # 复用 Pipeline 的分句正则和常量
 _SENTENCE_END = re.compile(r'[。！？!?…]+|(?<=[^0-9])[.]+(?=[^0-9])|[；;]+')
@@ -330,7 +398,7 @@ class HostOrchestrator:
     # ------------------------------------------------------------------
 
     def _run_agent(self, agent: AgentExecutor, user_text: str) -> str:
-        """Agent 模式执行。"""
+        """Agent 模式执行，集成思考播报。"""
         # 构建初始状态
         system_prompt = self.host_context.persona_holder.current_persona
         messages = [LLMMessage(role="system", content=system_prompt)]
@@ -355,12 +423,21 @@ class HostOrchestrator:
 
         messages.append(LLMMessage(role="user", content=user_text))
 
-        # 执行 Agent
+        # 执行 Agent，使用DisplayCallbackHandler进行思考播报
         state = AgentState(messages=messages)
-        callbacks = CallbackManager([LoggingHandler()])
+        callbacks = CallbackManager([
+            LoggingHandler(),
+            DisplayCallbackHandler(self.display)
+        ])
         config = RunnableConfig(callbacks=callbacks, recursion_limit=5)
 
+        # 播报开始思考
+        callbacks.on_thinking_start("agent_run")
+
         final_state = agent.invoke(state, config)
+
+        # 播报思考结束
+        callbacks.on_thinking_end("agent_run")
 
         # 提取最终答案
         for msg in reversed(final_state.messages):

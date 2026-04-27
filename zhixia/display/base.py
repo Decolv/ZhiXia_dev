@@ -2,7 +2,8 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict
+from pathlib import Path
+from typing import Dict, List, Optional, Union
 
 
 @dataclass
@@ -10,6 +11,11 @@ class DisplayPayload:
     text: str
     emotion: str = "neutral"
     is_thinking: bool = False
+    thinking_text: str = ""  # 思考内容，用于播报模型思考过程
+    # 图片支持：可以是单个图片路径或图片路径列表
+    images: Optional[List[Union[str, Path]]] = None
+    # 图片标题/说明
+    image_captions: Optional[List[str]] = None
     metadata: Dict = field(default_factory=dict)
 
 

@@ -85,6 +85,14 @@ class BaseCallbackHandler(ABC):
         """Agent 产生 Thought（可用于流式展示思考过程）。"""
         pass
 
+    def on_thinking_start(self, run_id: str, **kwargs: Any) -> None:
+        """Agent 开始思考时调用。"""
+        pass
+
+    def on_thinking_end(self, run_id: str, **kwargs: Any) -> None:
+        """Agent 结束思考时调用。"""
+        pass
+
     def on_agent_action(
         self, run_id: str, action: Any, **kwargs: Any
     ) -> None:
@@ -212,6 +220,20 @@ class CallbackManager:
             except Exception:
                 logger.debug("Callback handler error", exc_info=True)
 
+    def on_thinking_start(self, run_id: str) -> None:
+        for h in self.handlers:
+            try:
+                h.on_thinking_start(run_id)
+            except Exception:
+                logger.debug("Callback handler error", exc_info=True)
+
+    def on_thinking_end(self, run_id: str) -> None:
+        for h in self.handlers:
+            try:
+                h.on_thinking_end(run_id)
+            except Exception:
+                logger.debug("Callback handler error", exc_info=True)
+
     def on_agent_action(self, run_id: str, action: Any) -> None:
         for h in self.handlers:
             try:
@@ -271,6 +293,27 @@ class StreamingDisplayHandler(BaseCallbackHandler):
         self.show_thoughts = show_thoughts
         self._thought_buffer = ""
 
+    def on_thinking_start(self, run_id: str, **kwargs: Any) -> None:
+        """开始思考时更新显示状态。"""
+        if self.display:
+            from zhixia.display.base import DisplayPayload
+            self.display.update_thinking(True)
+            self.display.show(DisplayPayload(
+                text="",
+                emotion="thinking",
+                is_thinking=True,
+                thinking_text="正在思考..."
+            ))
+        if self.show_thoughts:
+            print("\n[思考] 开始思考...")
+
+    def on_thinking_end(self, run_id: str, **kwargs: Any) -> None:
+        """结束思考时更新显示状态。"""
+        if self.display:
+            self.display.update_thinking(False)
+        if self.show_thoughts:
+            print("\n[思考] 思考完成")
+
     def on_agent_thought(self, run_id: str, thought: str, **kwargs: Any) -> None:
         self._thought_buffer += thought
         if self.show_thoughts:
@@ -280,11 +323,30 @@ class StreamingDisplayHandler(BaseCallbackHandler):
         from zhixia.agent.base import AgentAction
 
         if isinstance(action, AgentAction):
-            print(f"\n[工具] 调用 {action.tool}({action.tool_input})")
+            action_msg = f"正在调用 {action.tool} 工具..."
+            if self.display:
+                from zhixia.display.base import DisplayPayload
+                self.display.show(DisplayPayload(
+                    text="",
+                    emotion="working",
+                    is_thinking=True,
+                    thinking_text=action_msg
+                ))
+            if self.show_thoughts:
+                print(f"\n[工具] 调用 {action.tool}({action.tool_input})")
 
     def on_agent_finish(self, run_id: str, finish: Any, **kwargs: Any) -> None:
         from zhixia.agent.base import AgentFinish
 
         if isinstance(finish, AgentFinish):
             text = finish.return_values.get("text", "")
-            print(f"\n[回答] {text}")
+            if self.display:
+                from zhixia.display.base import DisplayPayload
+                self.display.show(DisplayPayload(
+                    text=text,
+                    emotion="neutral",
+                    is_thinking=False,
+                    thinking_text=""
+                ))
+            if self.show_thoughts:
+                print(f"\n[回答] {text}")

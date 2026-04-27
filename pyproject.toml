@@ -13,6 +13,7 @@ dependencies = [
 asr-funasr = ["funasr", "modelscope"]
 asr-whisper = ["faster-whisper"]
 tts-piper = ["piper-tts"]
+rag-chroma = ["chromadb>=0.4.0", "sentence-transformers>=2.2.0"]
 dev = ["pytest", "ipykernel"]
 
 [build-system]
