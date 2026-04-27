@@ -38,6 +38,8 @@ class AgentConfigurator:
     - 新生助手卡 → ToolCallingAgent
     - 复杂推理卡 → ReActAgent
     - 简单问答卡 → 直接 LLM
+    
+    线程安全：所有读写操作使用锁保护。
     """
 
     def __init__(self) -> None:
@@ -46,44 +48,52 @@ class AgentConfigurator:
         self._early_stopping_method: str = "raise"
         self._enabled_tools: Optional[List[str]] = None  # None=全部启用
         self._custom_system_prompt: Optional[str] = None
+        self._lock = threading.Lock()
 
     def set_agent_type(self, agent_type: str) -> None:
         """设置 Agent 类型: 'react', 'tool_calling', 'direct_llm'。"""
-        self._agent_type = agent_type
+        with self._lock:
+            self._agent_type = agent_type
 
     def set_max_iterations(self, max_iter: int) -> None:
         """设置最大工具调用迭代次数。"""
-        self._max_iterations = max_iter
+        with self._lock:
+            self._max_iterations = max_iter
 
     def set_early_stopping_method(self, method: str) -> None:
         """设置提前停止方法: 'force', 'raise'。"""
-        self._early_stopping_method = method
+        with self._lock:
+            self._early_stopping_method = method
 
     def set_enabled_tools(self, tool_names: Optional[List[str]]) -> None:
         """设置启用的工具列表，None 表示启用所有注册的工具。"""
-        self._enabled_tools = tool_names
+        with self._lock:
+            self._enabled_tools = tool_names
 
     def set_system_prompt(self, prompt: Optional[str]) -> None:
         """设置自定义 system prompt（None 则使用 persona_holder）。"""
-        self._custom_system_prompt = prompt
+        with self._lock:
+            self._custom_system_prompt = prompt
 
     def get_config(self) -> Dict[str, Any]:
         """获取 Agent 配置。"""
-        return {
-            "agent_type": self._agent_type,
-            "max_iterations": self._max_iterations,
-            "early_stopping_method": self._early_stopping_method,
-            "enabled_tools": self._enabled_tools,
-            "custom_system_prompt": self._custom_system_prompt,
-        }
+        with self._lock:
+            return {
+                "agent_type": self._agent_type,
+                "max_iterations": self._max_iterations,
+                "early_stopping_method": self._early_stopping_method,
+                "enabled_tools": self._enabled_tools,
+                "custom_system_prompt": self._custom_system_prompt,
+            }
 
     def clear(self) -> None:
         """重置为默认配置。"""
-        self._agent_type = "react"
-        self._max_iterations = 5
-        self._early_stopping_method = "raise"
-        self._enabled_tools = None
-        self._custom_system_prompt = None
+        with self._lock:
+            self._agent_type = "react"
+            self._max_iterations = 5
+            self._early_stopping_method = "raise"
+            self._enabled_tools = None
+            self._custom_system_prompt = None
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +191,9 @@ class HostContext:
 
     插卡时，HostOrchestrator 构造此对象传给 card.on_mount()，
     卡片通过此对象注册工具、人设、知识等。
+    
+    线程安全：
+    - response_processors 列表使用锁保护
     """
 
     # 工具注册表（Skill 卡在此注册工具）
@@ -202,24 +215,32 @@ class HostContext:
     agent_configurator: AgentConfigurator = field(default_factory=AgentConfigurator)
 
     # 响应后处理器列表（卡片可注册自定义响应处理逻辑）
-    response_processors: List[ResponsePostProcessor] = field(default_factory=list)
+    response_processors: List["ResponsePostProcessor"] = field(default_factory=list)
 
     # 主机配置
     config: Optional[Any] = None
 
+    # LLM引擎（工具需要调用LLM智能生成答案）
+    llm_engine: Optional[Any] = None
+
     # 卡片根目录（卡片可读取自己的资源文件）
     card_root: Optional[Path] = None
 
-    def register_response_processor(self, processor: ResponsePostProcessor) -> None:
+    def __post_init__(self) -> None:
+        self._processors_lock = threading.RLock()
+
+    def register_response_processor(self, processor: "ResponsePostProcessor") -> None:
         """注册响应后处理器。"""
-        self.response_processors.append(processor)
+        with self._processors_lock:
+            self.response_processors.append(processor)
         logger.info("响应后处理器已注册: %s", processor.name)
 
     def unregister_response_processor(self, processor_name: str) -> None:
         """注销响应后处理器。"""
-        self.response_processors = [
-            p for p in self.response_processors if p.name != processor_name
-        ]
+        with self._processors_lock:
+            self.response_processors = [
+                p for p in self.response_processors if p.name != processor_name
+            ]
         logger.info("响应后处理器已注销: %s", processor_name)
 
     def __repr__(self) -> str:
@@ -238,7 +259,8 @@ class PersonaHolder:
 
     支持多层人设叠加：
         基础人设（主机默认）
-        + Skill 卡人设（插卡时叠加）
+        + Skill 卡人设1（插卡时叠加）
+        + Skill 卡人设2（插卡时叠加）
         → 最终 system prompt
 
     拔卡后自动恢复到基础人设。
@@ -246,27 +268,46 @@ class PersonaHolder:
 
     def __init__(self, base_persona: str) -> None:
         self.base_persona = base_persona
-        self._overlay: Optional[str] = None
-        self._card_name: Optional[str] = None
+        self._overlays: List[Tuple[str, str]] = []
 
     @property
     def current_persona(self) -> str:
-        if self._overlay:
-            return self._overlay
-        return self.base_persona
+        if not self._overlays:
+            return self.base_persona
+        overlay_parts = [persona for _, persona in self._overlays]
+        return "\n\n".join([self.base_persona] + overlay_parts)
 
     def set_overlay(self, persona: str, card_name: str) -> None:
-        """Skill 卡挂载时调用：覆盖人设。"""
-        self._overlay = persona
-        self._card_name = card_name
-        logger.info("人设已叠加 [%s]: %s...", card_name, persona[:50])
+        """Skill 卡挂载时调用：追加人设叠加。
+        
+        如果同一卡片名已存在，则替换其人设。
+        """
+        existing_idx = None
+        for i, (name, _) in enumerate(self._overlays):
+            if name == card_name:
+                existing_idx = i
+                break
+        
+        if existing_idx is not None:
+            self._overlays[existing_idx] = (card_name, persona)
+            logger.info("人设已更新 [%s]: %s...", card_name, persona[:50])
+        else:
+            self._overlays.append((card_name, persona))
+            logger.info("人设已追加 [%s]: %s...", card_name, persona[:50])
 
-    def clear_overlay(self) -> None:
-        """Skill 卡卸载时调用：恢复基础人设。"""
-        if self._card_name:
-            logger.info("人设已恢复（移除 %s 的叠加）", self._card_name)
-        self._overlay = None
-        self._card_name = None
+    def clear_overlay(self, card_name: Optional[str] = None) -> None:
+        """Skill 卡卸载时调用：移除指定卡片的人设叠加。
+        
+        如果不指定 card_name，则清除所有叠加人设。
+        """
+        if card_name is None:
+            self._overlays.clear()
+            logger.info("所有人设叠加已清除")
+        else:
+            self._overlays = [
+                (name, persona) for name, persona in self._overlays if name != card_name
+            ]
+            logger.info("人设叠加已移除 [%s]", card_name)
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +399,7 @@ class CardBase(ABC):
     def __init__(self, manifest: CardManifest, card_root: Path) -> None:
         self.manifest = manifest
         self.card_root = card_root
+        self.registered_tool_names: List[str] = []
 
     @property
     def name(self) -> str:
@@ -404,17 +446,16 @@ class SkillCard(CardBase, ABC):
             def on_mount(self, host):
                 host.tool_registry.register(CampusMapTool())
                 host.persona_holder.set_overlay(self._load_persona(), self.name)
-                # 可选：配置 Agent 类型
                 host.agent_configurator.set_agent_type("tool_calling")
 
             def on_unmount(self, host):
                 host.tool_registry.unregister("campus_map")
-                host.persona_holder.clear_overlay()
+                host.persona_holder.clear_overlay(self.name)
     """
 
     @abstractmethod
-    def get_tools(self) -> ToolRegistry:
-        """返回本卡提供的所有工具。"""
+    def get_tools(self) -> List[Any]:
+        """返回本卡提供的所有工具列表。"""
         ...
 
     @abstractmethod

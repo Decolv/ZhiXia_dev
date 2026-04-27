@@ -76,15 +76,15 @@ class NavDisplay(DisplayOutput):
     def show_navigation_ui(self, nav_data: Dict[str, Any]) -> None:
         """展示导航界面，暂停眼睛显示。"""
         self._showing_nav = True
+        self.eye_display.hide()
         self.nav_renderer.show(nav_data)
-        # 暂停眼睛（不停止线程，只是隐藏窗口）
         logger.info("导航界面已展示，目的地: %s", nav_data.get("destination", "未知"))
 
     def hide_navigation_ui(self) -> None:
         """隐藏导航界面，恢复眼睛显示。"""
         self._showing_nav = False
         self.nav_renderer.hide()
-        # 恢复眼睛并眨眼
+        self.eye_display.show_eyes()
         self.eye_display.force_eye_blink()
         logger.info("导航界面已关闭，恢复眼睛显示")
 

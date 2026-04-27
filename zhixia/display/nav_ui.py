@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from zhixia.display.pygame_manager import PygameManager
+
 logger = logging.getLogger(__name__)
 
 
@@ -85,22 +87,19 @@ class NavUIRenderer:
         if self._running:
             return
 
-        try:
-            import pygame
-        except ImportError:
-            logger.error("pygame 未安装，导航渲染器不可用。")
+        if not PygameManager.init():
+            logger.error("Pygame 初始化失败，导航渲染器不可用。")
             return
 
         os.environ["SDL_VIDEO_WINDOW_POS"] = "center"
-        pygame.init()
 
+        import pygame
         self.screen = pygame.display.set_mode(
             (self.window_width, self.window_height),
             pygame.NOFRAME | pygame.RESIZABLE
         )
         pygame.display.set_caption("知匣 - 导航")
 
-        # 创建图标
         self._running = True
         self._thread = threading.Thread(target=self._render_loop, daemon=True, name="NavUIRenderer")
         self._thread.start()
@@ -111,11 +110,7 @@ class NavUIRenderer:
         self._running = False
         if self._thread:
             self._thread.join(timeout=2.0)
-        try:
-            import pygame
-            pygame.quit()
-        except Exception:
-            pass
+        PygameManager.quit()
         logger.info("导航界面渲染器已停止")
 
     def _render_loop(self) -> None:
@@ -133,34 +128,35 @@ class NavUIRenderer:
             font_medium = pygame.font.Font(None, 24)
             font_small = pygame.font.Font(None, 20)
 
-        while self._running:
-            # 事件处理
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    self._running = False
-                    break
+        try:
+            while self._running:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        self._running = False
+                        break
 
-            with self._lock:
-                if self.current_nav_data is None:
-                    # 无导航数据时显示待机状态
+                # 仅在锁内复制数据
+                with self._lock:
+                    nav_data = None
+                    if self.current_nav_data is not None:
+                        nav_data = dict(self.current_nav_data)
+
+                # 在锁外执行渲染
+                if nav_data is None:
                     self.screen.fill(self.BG_COLOR)
                     self._draw_waiting_text(self.screen, font_medium)
-                    pygame.display.flip()
-                    clock.tick(30)
-                    continue
-
-                nav_data = dict(self.current_nav_data)
-                elapsed = time.monotonic() - self._start_time
-
-                # 更新动画
-                self._update_animation(elapsed)
-
-                # 渲染
-                self.screen.fill(self.BG_COLOR)
-                self._draw_nav_ui(self.screen, nav_data, font_large, font_medium, font_small, elapsed)
+                else:
+                    elapsed = time.monotonic() - self._start_time
+                    self._update_animation(elapsed)
+                    self.screen.fill(self.BG_COLOR)
+                    self._draw_nav_ui(self.screen, nav_data, font_large, font_medium, font_small, elapsed)
 
                 pygame.display.flip()
                 clock.tick(30)
+        except Exception as exc:
+            logger.error("NavUI渲染循环异常: %s", exc)
+        finally:
+            self._running = False
 
     def _update_animation(self, elapsed: float) -> None:
         """更新动画状态。"""

@@ -41,8 +41,7 @@ class HNUFreshmanSkill(SkillCard):
         if self._tools_created:
             return  # 防止重复注册
 
-        # 尝试从host获取LLM引擎
-        llm_engine = getattr(host, 'llm_engine', None)
+        llm_engine = host.llm_engine
 
         # 创建工具实例并注入LLM引擎（插卡时创建）
         campus_navigate_tool = CampusNavigateTool(llm_engine=llm_engine)
@@ -53,6 +52,7 @@ class HNUFreshmanSkill(SkillCard):
         host.tool_registry.register(campus_navigate_tool)
         host.tool_registry.register(major_query_tool)
         host.tool_registry.register(life_guide_tool)
+        self.registered_tool_names = ["campus_navigate", "query_major", "campus_life_guide"]
 
         self._tools_created = True
 
@@ -81,11 +81,11 @@ class HNUFreshmanSkill(SkillCard):
 
     def on_unmount(self, host: HostContext) -> None:
         """拔卡时：注销工具 + 恢复人设 + 注销响应处理器。"""
-        # 注销工具（拔卡时注销）
-        host.tool_registry.unregister("campus_navigate")
-        host.tool_registry.unregister("query_major")
-        host.tool_registry.unregister("campus_life_guide")
-        host.persona_holder.clear_overlay()
+        for tool_name in list(self.registered_tool_names):
+            host.tool_registry.unregister(tool_name)
+        self.registered_tool_names = []
+        
+        host.persona_holder.clear_overlay(self.name)
 
         # 注销导航响应后处理器并清理资源
         if hasattr(self, '_nav_processor') and self._nav_processor:

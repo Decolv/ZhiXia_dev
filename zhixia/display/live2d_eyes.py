@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from zhixia.display.pygame_manager import PygameManager
+
 logger = logging.getLogger(__name__)
 
 # 默认配置文件路径
@@ -142,17 +144,13 @@ class Live2dEyeRenderer:
         if self._running:
             return
 
-        # 延迟导入 pygame（避免无 GUI 环境报错）
-        try:
-            import pygame
-        except ImportError:
-            logger.error("pygame 未安装，眼睛渲染器不可用。安装命令: pip install pygame")
+        if not PygameManager.init():
+            logger.error("Pygame 初始化失败，眼睛渲染器不可用。")
             return
 
         os.environ["SDL_VIDEO_WINDOW_POS"] = "center"
-        pygame.init()
 
-        # 创建无边框透明窗口
+        import pygame
         self.screen = pygame.display.set_mode(
             (self.window_width, self.window_height),
             pygame.NOFRAME | pygame.RESIZABLE
@@ -160,7 +158,6 @@ class Live2dEyeRenderer:
         pygame.display.set_caption("知匣 - 小匣")
         pygame.display.set_icon(self._create_icon(pygame))
 
-        # 设置窗口透明度
         try:
             pygame.display.get_wm_info()
         except Exception:
@@ -176,11 +173,7 @@ class Live2dEyeRenderer:
         self._running = False
         if self._thread:
             self._thread.join(timeout=2.0)
-        try:
-            import pygame
-            pygame.quit()
-        except Exception:
-            pass
+        PygameManager.quit()
         logger.info("Live2D 眼睛渲染器已停止")
 
     def _create_icon(self, pygame) -> "pygame.Surface":
@@ -199,39 +192,46 @@ class Live2dEyeRenderer:
         clock = pygame.time.Clock()
         font = None
 
-        while self._running:
-            # 事件处理
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    self._running = False
-                    break
+        try:
+            while self._running:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        self._running = False
+                        break
 
-            # 更新动画
-            self._update_animation()
+                self._update_animation()
 
-            # 渲染
-            self.screen.fill(self.bg_color)
-            self._draw_eyes(self.screen)
+                self.screen.fill(self.bg_color)
+                self._draw_eyes(self.screen)
 
-            pygame.display.flip()
-            clock.tick(60)  # 60 FPS
+                pygame.display.flip()
+                clock.tick(60)
+        except Exception as exc:
+            logger.error("Live2D眼睛渲染循环异常: %s", exc)
+        finally:
+            self._running = False
 
     def _update_animation(self) -> None:
         """更新动画状态。"""
         now = time.monotonic()
 
         with self._lock:
+            # 自动眨眼逻辑
+            cfg = PRESET_STATES.get(self.current_state, PRESET_STATES["neutral"])
+            blink_interval = cfg.blink_interval_ms / 1000.0
+            if not self.is_blinking and (now - self.last_blink_time) >= blink_interval:
+                self.is_blinking = True
+                self.blink_progress = 0.0
+
             # 平滑过渡到目标开合度
             target = self.target_open
             if self.is_blinking:
-                # 眨眼动画
                 self.blink_progress += 1.0 / 60.0 / self.blink_duration
                 if self.blink_progress >= 1.0:
                     self.is_blinking = False
                     self.blink_progress = 0.0
                     self.last_blink_time = now
                 else:
-                    # 使用正弦曲线模拟眨眼
                     blink_factor = math.sin(self.blink_progress * math.pi)
                     target = max(0.05, self.target_open * (1.0 - blink_factor))
 
@@ -239,7 +239,6 @@ class Live2dEyeRenderer:
             self.current_open += (target - self.current_open) * 0.15
 
             # 瞳孔移动
-            cfg = PRESET_STATES.get(self.current_state, PRESET_STATES["neutral"])
             self._update_pupil(cfg, now)
 
     def _update_pupil(self, cfg: EyeStateConfig, now: float) -> None:
@@ -271,32 +270,35 @@ class Live2dEyeRenderer:
         self.pupil_y += (self.pupil_target_y - self.pupil_y) * speed
 
     def _draw_eyes(self, screen) -> None:
-        """绘制眼睛。"""
+        """绘制眼睛（使用锁保护读取共享状态）。"""
         import pygame
 
-        center_x = self.window_width // 2
-        center_y = self.window_height // 2
-        half_spacing = self.eye_spacing // 2
+        with self._lock:
+            center_x = self.window_width // 2
+            center_y = self.window_height // 2
+            half_spacing = self.eye_spacing // 2
+            current_open = self.current_open
+            pupil_x = self.pupil_x
+            pupil_y = self.pupil_y
+            current_state = self.current_state
+            eye_size = self.eye_size
+            eye_spacing = self.eye_spacing
 
-        cfg = PRESET_STATES.get(self.current_state, PRESET_STATES["neutral"])
+        cfg = PRESET_STATES.get(current_state, PRESET_STATES["neutral"])
 
-        for side in [-1, 1]:  # 左眼和右眼
-            eye_x = center_x + side * half_spacing
+        for side in [-1, 1]:
+            eye_x = center_x + side * (eye_spacing // 2)
             eye_y = center_y
 
-            # 眼睛高度
-            eye_height = self.eye_size * self.current_open
-            eye_width = self.eye_size * 0.8
+            eye_height = eye_size * current_open
+            eye_width = eye_size * 0.8
 
-            # 瞳孔偏移
-            pupil_offset_x = self.pupil_x * self.eye_size * 0.3
-            pupil_offset_y = self.pupil_y * eye_height * 0.3
+            pupil_offset_x = pupil_x * eye_size * 0.3
+            pupil_offset_y = pupil_y * eye_height * 0.3
 
-            if cfg.eye_curve and self.current_open > 1.0:
-                # 开心时绘制弯月形眼睛
+            if cfg.eye_curve and current_open > 1.0:
                 self._draw_curved_eye(screen, eye_x, eye_y, eye_width, eye_height, side)
             else:
-                # 正常眼睛
                 self._draw_normal_eye(screen, eye_x, eye_y, eye_width, eye_height, pupil_offset_x, pupil_offset_y)
 
     def _draw_normal_eye(self, screen, x: int, y: int, w: float, h: float, px: float, py: float) -> None:

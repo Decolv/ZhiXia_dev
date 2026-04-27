@@ -192,6 +192,7 @@ class HostOrchestrator:
             knowledge_hub=knowledge_hub,
             display=self.display,
             config=config,
+            llm_engine=self.llm_engine,
         )
 
         # 初始化卡片加载器

@@ -50,8 +50,8 @@ class Live2dEyeDisplay(DisplayOutput):
             window_width=window_width,
             window_height=window_height,
         )
-        self._is_thinking = False
         self._current_emotion = "neutral"
+        self._is_hidden = False
 
         if auto_start:
             self.start()
@@ -66,6 +66,28 @@ class Live2dEyeDisplay(DisplayOutput):
         """停止眼睛渲染器。"""
         self.renderer.stop()
         logger.info("Live2D 眼睛显示已停止")
+
+    def hide(self) -> None:
+        """隐藏眼睛窗口。"""
+        if not self._is_hidden:
+            try:
+                import pygame
+                pygame.display.iconify()
+                self._is_hidden = True
+                logger.debug("眼睛窗口已隐藏")
+            except Exception:
+                pass
+
+    def show_eyes(self) -> None:
+        """显示眼睛窗口。"""
+        if self._is_hidden:
+            try:
+                import pygame
+                pygame.display.iconify()
+                self._is_hidden = False
+                logger.debug("眼睛窗口已显示")
+            except Exception:
+                pass
 
     def show(self, payload: DisplayPayload) -> None:
         """根据 DisplayPayload 更新眼睛状态。"""
@@ -89,7 +111,6 @@ class Live2dEyeDisplay(DisplayOutput):
 
     def clear(self) -> None:
         """重置眼睛状态到默认。"""
-        self._is_thinking = False
         self._current_emotion = "neutral"
         self.renderer.set_state("neutral")
 

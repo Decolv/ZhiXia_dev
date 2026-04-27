@@ -28,7 +28,7 @@ import logging
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from zhixia.core.card_base import CardBase, CardManifest, HostContext
 from zhixia.core.user_profile import UserProfile
@@ -67,10 +67,13 @@ class SlotWatcher:
         if new_signature == self._last_signature:
             return False, None
 
-        self._last_signature = new_signature
         return True, card_root
 
-    def set_current_card(self, card: Any) -> None:
+    def update_signature(self, card_root: Optional[Path]) -> None:
+        """更新签名（仅在挂载成功后调用）。"""
+        self._last_signature = self._compute_signature(card_root)
+
+    def set_current_card(self, card: CardBase) -> None:
         self._current_card = card
 
     def clear_current_card(self) -> None:
@@ -181,6 +184,11 @@ class CardLoader:
         return [c.name for c in self.mounted_cards.values()]
 
     def is_slot_empty(self, slot_id: str) -> bool:
+        """检查槽位是否没有挂载卡片。
+        
+        注意：此方法仅检查内存中是否有挂载的卡片，
+        不检查文件系统上槽位目录是否为空。
+        """
         return slot_id not in self.mounted_cards
 
     # -- 内部方法：挂载 / 卸载 --
@@ -189,13 +197,11 @@ class CardLoader:
         """挂载单张卡片。"""
         logger.info("开始挂载卡片 [%s]: %s", slot_id, card_root)
 
-        # 1. 读取 manifest
         manifest = CardManifest.load(card_root)
         if manifest is None:
             logger.error("[%s] manifest 加载失败", slot_id)
             return None
 
-        # 2. 类型校验
         slot_type = self.watchers[slot_id].slot_type
         if slot_type != manifest.type:
             logger.error(
@@ -204,20 +210,16 @@ class CardLoader:
             )
             return None
 
-        # 3. 动态导入卡片模块
         card_instance = self._import_and_instantiate(manifest, card_root, slot_id)
         if card_instance is None:
             return None
 
-        # 4. 更新 host_context 的 card_root（保存旧值以便恢复）
         old_card_root = self.host.card_root
         self.host.card_root = card_root
 
-        # 5. 加载用户画像
         self.host.user_profile = UserProfile(card_root=card_root)
         logger.info("[%s] 用户画像已加载", slot_id)
 
-        # 6. 调用生命周期
         try:
             card_instance.on_mount(self.host)
         except Exception as exc:
@@ -229,6 +231,7 @@ class CardLoader:
         self.mounted_cards[slot_id] = card_instance
         watcher = self.watchers[slot_id]
         watcher.set_current_card(card_instance)
+        watcher.update_signature(card_root)
 
         logger.info("[%s] 卡片挂载成功: %s v%s", slot_id, manifest.name, manifest.version)
         return card_instance
@@ -237,35 +240,34 @@ class CardLoader:
         """卸载单张卡片。"""
         logger.info("开始卸载卡片 [%s]: %s", slot_id, card.name)
 
-        # 1. 保存用户画像
         if self.host.user_profile:
             self.host.user_profile.save()
             logger.info("[%s] 用户画像已保存", slot_id)
             self.host.user_profile = None
 
-        # 2. 调用生命周期
         try:
             card.on_unmount(self.host)
         except Exception as exc:
             logger.exception("[%s] on_unmount 失败: %s", slot_id, exc)
 
-        # 3. 主机级兜底清理（即使卡片的 on_unmount 遗漏）
-        self.host.persona_holder.clear_overlay()
+        self.host.persona_holder.clear_overlay(card.name)
         self.host.knowledge_hub.unregister_retriever(card.name)
         self.host.knowledge_hub.unregister_assets(card.name)
-        for tool in list(self.host.tool_registry.list_tools()):
-            self.host.tool_registry.unregister(tool.name)
+        for tool_name in list(card.registered_tool_names):
+            self.host.tool_registry.unregister(tool_name)
 
-        # 4. 清理模块
         self._cleanup_modules(card.card_root)
 
-        # 5. 从注册表移除
         if slot_id in self.mounted_cards:
             del self.mounted_cards[slot_id]
 
         watcher = self.watchers.get(slot_id)
         if watcher:
             watcher.clear_current_card()
+
+        old_card_root = self.host.card_root
+        if old_card_root == card.card_root:
+            self.host.card_root = Path()
 
         logger.info("[%s] 卡片卸载完成: %s", slot_id, card.name)
 
