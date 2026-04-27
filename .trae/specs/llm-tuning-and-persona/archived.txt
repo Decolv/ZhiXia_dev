@@ -1,0 +1,6 @@
+归档日期: 2026-04-27
+归档原因: 所有 checklist 项已完成（7/7）
+- max_new_tokens 调整为 256，max_context_len 调整为 1024
+- temperature 调整为 1.0
+- system_prompt 更新为小匣人设提示词
+- 系统提示词语言与用户输入一致

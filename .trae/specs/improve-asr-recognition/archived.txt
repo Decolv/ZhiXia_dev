@@ -1,0 +1,5 @@
+归档日期: 2026-04-27
+归档原因: 所有 checklist 项已完成（8/8）
+- ASRConfig 包含 VAD 和标点模型配置项
+- Whisper 和 FunASR 引擎正确使用 VAD 模型
+- ASRResult 包含合理的 confidence 值

@@ -50,7 +50,7 @@ class RKLLMEngine(LLMEngine):
     def _ensure_model(self) -> None:
         if self._llm is not None:
             return
-        from rkllm_inference import create_rkllm_from_hf
+        from zhixia.llm.rkllm_inference import create_rkllm_from_hf
 
         model_path = self._config.model_path
         if not os.path.isabs(model_path):

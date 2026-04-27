@@ -19,7 +19,7 @@ import shutil
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SLOT_A = PROJECT_ROOT / "cards" / "slot_a"  # Skill 卡槽位
 SLOT_B = PROJECT_ROOT / "cards" / "slot_b"  # Knowledge 卡槽位
 

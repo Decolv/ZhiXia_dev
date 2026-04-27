@@ -161,12 +161,30 @@ class DisplayCallbackHandler(BaseCallbackHandler):
 ### 3. 流式并发流水线
 
 ```
-Thread-A (LLM)  → 分句 → tts_queue
-Thread-B (TTS)  → 合成 → play_queue  
-Thread-C (Play) → 播放
+输入音频
+   ↓
+[ASR] 语音识别 → 文本
+   ↓
+[LLM] 流式推理 → token 流
+   ↓
+   ├─→ [分句] → 完整句子 → [TTS] 内存合成 → WAV → [播放]
+   │
+   └─→ [解析] 完整 JSON → emotion + metadata → [显示]
 ```
 
+三线程并发：`Thread-A (LLM) → tts_queue → Thread-B (TTS) → play_queue → Thread-C (Play)`
+
 首句延迟 = ASR + LLM首token + TTS首句合成
+
+### 性能指标
+
+| 模块 | 耗时 | 备注 |
+|------|------|------|
+| ASR | 0.3-0.5s | 取决于音频长度 |
+| LLM 首句 | 0.2-0.4s | 流式输出 |
+| TTS 首句 | 0.1-0.2s | 内存合成 |
+| **首字延迟** | **0.6-1.1s** | ASR + LLM首句 + TTS首句 |
+| 总耗时 | 1.5-3.0s | 取决于回复长度 |
 
 ### 4. 图片资源支持
 
@@ -188,20 +206,89 @@ class CampusNavigateTool(Tool):
     "type": "rkllm",
     "model_path": "models/Qwen3-1.7B.rkllm",
     "max_new_tokens": 256,
-    "system_prompt": "你是智能助手小匣..."
+    "temperature": 0.8,
+    "top_p": 0.95,
+    "system_prompt": "你是智能助手小匣，用一句话简短回答。/no_think",
+    "enable_structured_output": false
   },
   "asr": {
     "type": "funasr",
-    "model_path": "models/funasr"
+    "engine": "funasr",
+    "model_path": "iic/speech_paraformer_asr_nat-zh-cn-16k-common-vocab8358-tensorflow1",
+    "input_audio": "/path/to/audio.wav"
   },
   "tts": {
     "type": "piper",
-    "model_path": "models/piper"
-  }
+    "engine": "piper",
+    "model_path": "models/piper/zh_CN-huayan-medium.onnx"
+  },
+  "log_level": "INFO"
 }
 ```
 
+### 关键配置项
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| `llm.max_new_tokens` | LLM 最大生成 token 数，控制回复长度 | 256 |
+| `llm.temperature` | 采样温度，越低越确定 | 0.8 |
+| `llm.enable_structured_output` | 启用情绪识别和结构化输出 | false |
+| `llm.system_prompt` | 系统提示，加 `/no_think` 关闭思考模式 | - |
+| `asr.engine` | ASR 引擎选择：`funasr` 或 `whisper` | funasr |
+| `log_level` | 日志级别：`INFO` 或 `DEBUG` | INFO |
+| `device.memory_optimization` | 启用内存优化 | false |
+
 ## 开发指南
+
+### Debug 方式
+
+**方式 1：启用 DEBUG 日志**
+
+编辑 `localconfig/localconfig.json`：
+```json
+{ "log_level": "DEBUG" }
+```
+运行时输出每个 token 的流式输出、TTS 合成耗时、模型加载信息、内存使用情况。
+
+**方式 2：逐步测试各模块**
+
+```python
+# 只测试 ASR
+from zhixia.asr.funasr_engine import FunASREngine
+from zhixia.config.settings import ASRConfig
+from pathlib import Path
+config = ASRConfig(input_audio="/path/to/audio.wav")
+asr = FunASREngine(config, Path("."))
+result = asr.transcribe(Path("/path/to/audio.wav"))
+
+# 只测试 LLM
+from zhixia.llm.rkllm_engine import RKLLMEngine
+from zhixia.llm.base import LLMMessage
+from zhixia.config.settings import LLMConfig
+config = LLMConfig(model_path="models/Qwen3-1.7B-w8a8-rk3588.rkllm")
+llm = RKLLMEngine(config)
+messages = [LLMMessage(role="user", content="你好")]
+response = llm.chat(messages, max_new_tokens=32)
+
+# 只测试 TTS
+from zhixia.tts.piper_engine import PiperTTSEngine
+config_obj = type('obj', (object,), {'model_path': 'models/piper/zh_CN-huayan-medium.onnx'})()
+tts = PiperTTSEngine(config_obj, Path("."))
+wav = tts.synthesize_to_bytes("你好，世界")
+```
+
+**方式 3：查看完整日志**
+```bash
+python -m zhixia 2>&1 | tee debug.log
+grep "LLM\|TTS\|ASR" debug.log
+```
+
+**方式 4：检查模型文件**
+```bash
+ls -lh .cache/modelscope/                # ASR 模型
+ls -lh models/Qwen3-1.7B-w8a8-rk3588.rkllm  # LLM 模型
+ls -lh models/piper/zh_CN-huayan-medium.onnx* # TTS 模型
+```
 
 ### 添加新工具
 
@@ -218,7 +305,6 @@ class MyTool(Tool):
         self._llm_engine = llm_engine
     
     def _execute(self, query: str) -> str:
-        # 使用LLM生成回答
         return self._generate_with_llm(query)
 ```
 
@@ -253,9 +339,29 @@ class MySkill(SkillCard):
 
 ### 常见问题
 
-1. **TTS合成失败**：确保Piper模型已正确安装
-2. **LLM响应慢**：检查NPU是否正常工作
-3. **卡片未加载**：检查卡片目录结构和manifest.json
+1. **首字延迟太长？**
+   - 检查模型是否已预热（第一次运行会加载模型）
+   - 日志中 "首句播放开始" 的时间点
+   - 是否启用了 thinking 模式（system_prompt 加 `/no_think` 关闭）
+
+2. **TTS合成失败？**
+   - 确保 Piper 模型已正确安装
+   - 检查：`ls -lh models/piper/zh_CN-huayan-medium.onnx*`
+   - 缺失时会自动从 HuggingFace 下载
+
+3. **LLM响应慢？**
+   - 检查 NPU 是否正常工作
+   - 确保使用 rkllm 类型而非 cloud
+
+4. **卡片未加载？**
+   - 检查卡片目录结构和 manifest.json
+   - 确认 card.py 和 tools/ 目录存在
+
+5. **内存占用过高？**
+   - 编辑 `localconfig.json` 设置 `"device": {"memory_optimization": true}`
+
+6. **想要 emotion 情绪识别？**
+   - 启用结构化输出：`"llm": {"enable_structured_output": true}`
 
 ### 日志调试
 
@@ -263,6 +369,8 @@ class MySkill(SkillCard):
 # 开启详细日志
 export LOG_LEVEL=DEBUG
 python -m zhixia
+
+# 或编辑 localconfig/localconfig.json 设置 "log_level": "DEBUG"
 ```
 
 ## 许可证

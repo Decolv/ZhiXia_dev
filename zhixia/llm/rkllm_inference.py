@@ -1,7 +1,4 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-RKLLM NPU推理模块
+"""RKLLM NPU推理模块
 使用ctypes调用librkllmrt.so进行NPU加速推理
 支持Qwen2.5和Qwen3模型
 """
@@ -22,13 +19,13 @@ MODEL_TYPE_QWEN3 = "qwen3"
 
 # 加载RKLLM Runtime库
 script_dir = os.path.dirname(os.path.abspath(__file__))
-rkllm_lib_path = os.path.join(script_dir, 'rknn_libs', 'librkllmrt.so')
+rkllm_lib_path = os.path.join(script_dir, '..', '..', 'rknn_libs', 'librkllmrt.so')
 
 if not os.path.exists(rkllm_lib_path):
     # 尝试其他路径
     rkllm_lib_path = '/usr/lib/librkllmrt.so'
     if not os.path.exists(rkllm_lib_path):
-        rkllm_lib_path = os.path.join(script_dir, 'librkllmrt.so')
+        rkllm_lib_path = os.path.join(script_dir, '..', '..', 'librkllmrt.so')
 
 try:
     _rkllm_lib = ctypes.CDLL(rkllm_lib_path)
@@ -411,17 +408,17 @@ class RKLLM:
             content = msg.get("content", "")
             
             if role == "system":
-                prompt_parts.append(f'<|im_start|>system\n{content}<|im_end|>')
+                prompt_parts.append(f'<|system|>\n{content}<|im_end|>')
             elif role == "user":
-                prompt_parts.append(f'<|im_start|>user\n{content}<|im_end|>')
+                prompt_parts.append(f'<|user|>\n{content}<|im_end|>')
             elif role == "assistant":
-                prompt_parts.append(f'<|im_start|>assistant\n{content}<|im_end|>')
+                prompt_parts.append(f'<|assistant|>\n{content}<|im_end|>')
             elif role == "tool":
-                prompt_parts.append(f'<|im_start|>tool\n{content}<|im_end|>')
+                prompt_parts.append(f'<|tool|>\n{content}<|im_end|>')
         
         # 添加助手开始标记，启用思考模式
         thinking_content = "" if not self.config.enable_thinking else "<think>\n"
-        prompt_parts.append(f'<|im_start|>assistant\n{thinking_content}')
+        prompt_parts.append(f'<|assistant|>\n{thinking_content}')
         prompt = "".join(prompt_parts)
         
         # 设置enable_thinking

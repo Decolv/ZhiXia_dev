@@ -1,4 +1,15 @@
-# Python virtual environments
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.pytest_cache/
+.cache/
+
+# Virtual Environments
 venv/
 .venv/
 .venv*/
@@ -12,7 +23,32 @@ share/
 lib-python/
 site-packages/
 
-# Downloaded model artifacts
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# AI Tools
+.claude/
+.kilo/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+*.log.*
+
+# Audio and Test
+recordings/
+tests/audio/
+*.wav
+
+# RKNN Models and Libraries
 models/**/*.gguf
 models/**/*.onnx
 models/**/*.onnx.json
@@ -21,35 +57,9 @@ models/**/*.jit
 models/**/*.bin
 models/**/*.rkllm
 asset/
-
-# Runtime logs
-logs/
-*.log
-*.log.*
-
-# Audio recordings and test outputs
-recordings/
-tests/audio/
-*.wav
-
-# Python and tool caches
-__pycache__/
-*.pyc
-.cache/
-.pytest_cache/
-
-# RKNN libraries
 rknn_libs/
 
-# Installation scripts
-install_dependencies.sh
-setup_rknpu.sh
-
-# Runtime scripts
-run_fast_tts.sh
-run_npu_only.sh
-
-# Local PC testing files
+# Local Config
 localconfig/localconfig.pc.json
 run_pc.ps1
 debug_pc.log

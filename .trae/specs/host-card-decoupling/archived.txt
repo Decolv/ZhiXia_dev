@@ -1,0 +1,7 @@
+归档日期: 2026-04-27
+归档原因: 所有 checklist 项已完成（11/11）
+- AgentConfigurator 和 ResponsePostProcessor 接口定义完成
+- HostContext 包含新接口字段
+- HostOrchestrator 移除卡片特定逻辑
+- NavResponseProcessor 实现完成
+- Agent 类型可动态切换

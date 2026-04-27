@@ -1,0 +1,7 @@
+归档日期: 2026-04-27
+归档原因: 所有 checklist 项已完成（12/12）
+- DisplayPayload 包含 thinking_text 字段
+- BaseCallbackHandler 包含思考相关方法
+- StreamingDisplayHandler 支持思考过程播报
+- CampusLifeGuideTool 移除所有硬编码 FAQ，使用 LLM 生成答案
+- HostOrchestrator 集成思考播报

@@ -117,6 +117,23 @@ This concurrent design minimizes time-to-first-audio: LLM, TTS, and playback ove
 - `localconfig/localconfig.pc.json` — PC development config (points to `sample.wav`, disables NPU)
 - `localconfig/localconfig.linux.json` — Linux variant
 
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `ZHIXIA_CONFIG` | Override config file path |
+| `ZHIXIA_ALLOW_FAKE_LLM` | Set to `1` to enable PC fallback mock LLM |
+| `MODELSCOPE_CACHE` | ModelScope model cache directory (default: `.cache/modelscope`) |
+| `PYTHONPATH` | Python module path (includes `.local/lib/python3.9/site-packages`) |
+| `LD_LIBRARY_PATH` | RKNN library paths (`rknn_libs`) |
+| `LOG_LEVEL` | Override log level (e.g., `DEBUG`) |
+
+### RKNN Libraries
+
+- Directory: `rknn_libs/` at project root
+- Contains: `librkllmrt.so` (RKLLM runtime), `librknnrt.so` (RKNN runtime), `rkllm.h`
+- Source: Download from Rockchip official SDK
+
 ### Important Code Conventions
 
 - **Type hints**: Used throughout (`list[str]`, `Optional[...]`, `Generator[str, None, None]`).

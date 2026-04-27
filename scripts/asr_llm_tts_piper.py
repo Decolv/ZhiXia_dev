@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ZhiXia 语音助手 — 重构后兼容入口
+[已废弃] ZhiXia 语音助手 — 重构后兼容入口
 
-此文件作为向后兼容的薄 shim，直接调用新的 zhixia 包。
-功能完全一致，但使用重构后的模块化架构。
+⚠️ 此脚本已废弃，不再推荐使用。
+
+推荐使用方式:
+    python -m zhixia
+
+此文件保留仅为向后兼容，功能完全由 zhixia.__main__ 提供。
 """
 
 import os
@@ -13,7 +17,7 @@ import subprocess
 from pathlib import Path
 
 # 获取当前脚本所在目录（项目根目录）
-script_dir = Path(__file__).resolve().parent
+script_dir = Path(__file__).resolve().parent.parent
 
 # 添加项目根目录到 Python 路径，确保可以导入 zhixia 包
 if str(script_dir) not in sys.path:
