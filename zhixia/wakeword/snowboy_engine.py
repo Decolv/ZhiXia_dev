@@ -11,7 +11,7 @@
 import logging
 import threading
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
 from zhixia.config.settings import WakeWordConfig
 from zhixia.wakeword.base import WakeWordEngine, WakeWordResult
@@ -36,7 +36,7 @@ class SnowboyWakeWordEngine(WakeWordEngine):
         self._should_stop = threading.Event()
         self._is_listening = False
         self._lock = threading.Lock()
-        self._model_paths: list[str] = []
+        self._model_paths: List[str] = []
 
     @property
     def name(self) -> str:
@@ -52,7 +52,7 @@ class SnowboyWakeWordEngine(WakeWordEngine):
             logger.warning("snowboy 未安装，唤醒词检测不可用")
             return False
 
-    def _resolve_model_paths(self) -> list[Path]:
+    def _resolve_model_paths(self) -> List[Path]:
         """解析模型路径，支持相对路径和绝对路径。"""
         paths = []
         for model_path_str in self._config.model_paths:

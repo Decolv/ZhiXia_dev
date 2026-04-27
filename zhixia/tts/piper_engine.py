@@ -5,7 +5,7 @@ import logging
 import urllib.request
 import wave
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from zhixia.config.settings import TTSConfig
 from zhixia.tts.base import TTSEngine
@@ -26,7 +26,7 @@ class PiperTTSEngine(TTSEngine):
     def name(self) -> str:
         return "piper"
 
-    def _model_files(self) -> tuple[Path, Path]:
+    def _model_files(self) -> Tuple[Path, Path]:
         model_path = self._project_root / self._config.model_path
         config_path = Path(str(model_path) + ".json")
         return model_path, config_path

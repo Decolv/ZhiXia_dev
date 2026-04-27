@@ -3,7 +3,7 @@
 import logging
 import socket
 import time
-from typing import Optional
+from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ def get_network_cache(ttl_seconds: float = _DEFAULT_CACHE_TTL) -> NetworkStatusC
 
 
 def check_internet_connectivity(
-    host: tuple[str, int] = _DEFAULT_CHECK_HOST,
+    host: Tuple[str, int] = _DEFAULT_CHECK_HOST,
     timeout: float = _DEFAULT_CHECK_TIMEOUT,
 ) -> bool:
     """

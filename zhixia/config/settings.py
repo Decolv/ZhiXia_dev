@@ -3,7 +3,7 @@
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 
 @dataclass
@@ -90,8 +90,8 @@ class DisplayConfig:
 class WakeWordConfig:
     enabled: bool = False
     engine: str = "snowboy"
-    model_paths: list[str] = field(default_factory=list)
-    keyword_names: list[str] = field(default_factory=lambda: ["zhixia"])
+    model_paths: List[str] = field(default_factory=list)
+    keyword_names: List[str] = field(default_factory=lambda: ["zhixia"])
     sensitivity: float = 0.5
     audio_gain: float = 1.0
     apply_frontend: bool = False

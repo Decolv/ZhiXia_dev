@@ -13,7 +13,7 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from zhixia.asr.base import ASREngine, ASRResult
 from zhixia.audio.base import AudioPlayer
@@ -39,7 +39,7 @@ _INITIAL_PLAY_BUFFER_CHUNKS = 2
 _SENTINEL = object()
 
 
-def _split_sentences(text: str) -> list[str]:
+def _split_sentences(text: str) -> List[str]:
     """按句末标点切分，保留标点。"""
     parts = []
     last = 0
@@ -181,7 +181,7 @@ class VoicePipeline:
     # 流水线核心
     # ------------------------------------------------------------------
 
-    def _run_streaming_pipeline(self, user_text: str, rag_context: Optional[RAGContext]) -> tuple[str, dict[str, Any]]:
+    def _run_streaming_pipeline(self, user_text: str, rag_context: Optional[RAGContext]) -> Tuple[str, Dict[str, Any]]:
         """
         三线程流水线：
           Thread-A (LLM)  → tts_queue
@@ -192,8 +192,8 @@ class VoicePipeline:
         """
         tts_queue: queue.Queue = queue.Queue(maxsize=4)
         play_queue: queue.Queue = queue.Queue(maxsize=4)
-        full_output_holder: list[str] = []
-        errors: list[Exception] = []
+        full_output_holder: List[str] = []
+        errors: List[Exception] = []
 
         # 详细计时统计
         timing_stats = {
@@ -444,7 +444,7 @@ class VoicePipeline:
     # 消息构建
     # ------------------------------------------------------------------
 
-    def _build_messages(self, user_text: str, rag_context: Optional[RAGContext]) -> list[LLMMessage]:
+    def _build_messages(self, user_text: str, rag_context: Optional[RAGContext]) -> List[LLMMessage]:
         messages = []
         system_prompt = self.config.llm.system_prompt
         if self.config.llm.enable_structured_output:
