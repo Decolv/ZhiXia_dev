@@ -1,8 +1,11 @@
-"""LLM 引擎抽象基类"""
+"""LLM 引擎抽象基类
+
+新增：支持工具绑定的抽象方法，为 ToolCallingAgent 提供底层支持。
+"""
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Generator, List
+from typing import Any, Dict, Generator, List, Optional
 
 
 @dataclass
@@ -40,3 +43,25 @@ class LLMEngine(ABC):
 
     def shutdown(self) -> None:
         """释放资源，默认空操作。"""
+
+    # -- 工具调用扩展（可选实现） --
+
+    def bind_tools(self, tools: List[Any]) -> "LLMEngine":
+        """绑定工具描述，返回支持工具调用的包装器。
+
+        默认实现：返回自身（文本模式，由上层 Agent 在 prompt 中注入工具描述）。
+        支持原生 function calling 的子类（如 CloudLLM）应覆盖此方法。
+        """
+        return self
+
+    def chat_with_tools(
+        self,
+        messages: List[LLMMessage],
+        tool_schemas: List[Dict[str, Any]],
+        max_new_tokens: int = 32,
+    ) -> str:
+        """使用原生 tool calling 调用 LLM。
+
+        默认回退到普通 chat（由上层 BoundLLM 处理 prompt 注入）。
+        """
+        return self.chat(messages, max_new_tokens)

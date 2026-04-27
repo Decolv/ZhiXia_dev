@@ -1,14 +1,19 @@
-"""Agent 核心抽象基类 — 对应 LangChain 的 BaseAgent / BaseTool
+"""Agent 核心抽象基类 —— 对应 LangChain BaseAgent / BaseTool
 
 设计原则：
 1. 最小依赖，不引入 langchain 包，保持项目轻量。
 2. 保留 LangChain 的核心语义：AgentAction / AgentFinish / AgentStep / BaseTool。
 3. 所有 Agent 交互都是同步的（语音场景下工具调用通常很快）。
+4. **新增**：BaseAgent 继承 Runnable 协议，支持 invoke / stream / LCEL 管道组合。
 """
+
+from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
+
+from zhixia.agent.runnable import Runnable, RunnableConfig
 
 
 # ---------------------------------------------------------------------------
@@ -25,6 +30,7 @@ class AgentAction:
         thought: Agent 的推理过程（ReAct 中的 Thought）。
         log: 原始 LLM 输出片段（用于调试或展示）。
     """
+
     tool: str
     tool_input: Union[str, dict] = ""
     thought: str = ""
@@ -40,6 +46,7 @@ class AgentFinish:
                        若启用结构化输出，可额外包含 "emotion" / "metadata"。
         log: 原始 LLM 输出片段。
     """
+
     return_values: Dict[str, Any] = field(default_factory=dict)
     log: str = ""
 
@@ -47,6 +54,7 @@ class AgentFinish:
 @dataclass
 class AgentStep:
     """ReAct 循环中的单步记录：Action + 执行后得到的 Observation。"""
+
     action: AgentAction
     observation: str = ""
 
@@ -60,12 +68,12 @@ AgentDecision = Union[AgentAction, AgentFinish]
 # ---------------------------------------------------------------------------
 
 class BaseTool(ABC):
-    """工具抽象基类 — 对应 LangChain BaseTool。
+    """工具抽象基类 —— 对应 LangChain BaseTool。
 
     子类需要实现：
         - name: 工具唯一标识
         - description: 工具功能描述（会被写入 prompt，影响 LLM 决策）
-        - _run(args) → str: 同步执行逻辑
+        - _run(args) -> str: 同步执行逻辑
 
     可选覆盖：
         - args_schema: 参数格式说明（默认无 schema，LLM 自由输入字符串）
@@ -91,13 +99,19 @@ class BaseTool(ABC):
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(name={self.name!r})"
 
+    def to_json_schema(self) -> Dict[str, Any]:
+        """生成工具的 JSON Schema 描述（用于结构化工具调用）。"""
+        from zhixia.agent.tool_agent import ToolSchemaBuilder
+
+        return ToolSchemaBuilder.build(self)
+
 
 # ---------------------------------------------------------------------------
-# Agent 抽象
+# Agent 抽象 —— 继承 Runnable 协议
 # ---------------------------------------------------------------------------
 
-class BaseAgent(ABC):
-    """Agent 决策核心 — 对应 LangChain BaseAgent。
+class BaseAgent(Runnable[Any, AgentDecision], ABC):
+    """Agent 决策核心 —— 对应 LangChain BaseAgent，同时兼容 Runnable 协议。
 
     职责：
         1. 接收用户输入 + 当前 intermediate_steps（历史 Thought/Action/Observation）。
@@ -106,6 +120,12 @@ class BaseAgent(ABC):
 
     子类需要实现：
         - plan → AgentDecision
+        - input_keys / return_values
+
+    **新增**：继承 Runnable 后，可以直接：
+        result = agent.invoke({"input": "...", "intermediate_steps": [...]})
+        # 或管道组合
+        chain = prompt | agent | executor
     """
 
     @abstractmethod
@@ -131,11 +151,31 @@ class BaseAgent(ABC):
     @property
     @abstractmethod
     def input_keys(self) -> List[str]:
-        """Agent plan() 需要的外部输入键名列表，如 ["input"]。"""
+        """Agent plan() 需要的外部输入键名列表，如 ["input"] """
         ...
 
     @property
     @abstractmethod
     def return_values(self) -> List[str]:
-        """AgentFinish.return_values 中期望包含的键名，如 ["text", "emotion"]。"""
+        """AgentFinish.return_values 中期望包含的键名，如 ["text", "emotion"] """
         ...
+
+    # -- Runnable 协议实现 --
+
+    def _invoke(self, input: Any, config: RunnableConfig) -> AgentDecision:
+        """将 Runnable 的 invoke 路由到 plan()。"""
+        if isinstance(input, dict):
+            intermediate_steps = input.get("intermediate_steps", [])
+            return self.plan(intermediate_steps, callbacks=config.callbacks, **input)
+        # 如果是 AgentState，提取所需信息
+        from zhixia.agent.state import AgentState
+
+        if isinstance(input, AgentState):
+            return self.plan(
+                input.intermediate_steps,
+                callbacks=config.callbacks,
+                input=input.last_user_input,
+                messages=input.to_messages_for_llm(),
+                **input.metadata,
+            )
+        raise ValueError(f"Agent 不支持的输入类型: {type(input)}")

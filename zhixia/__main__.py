@@ -72,6 +72,45 @@ def create_display(config):
     return NullDisplay()
 
 
+def create_agent_executor(config, llm_engine):
+    """创建 AgentExecutor（如果配置启用了 Agent 模式）。"""
+    if not getattr(config, "agent", None) or not config.agent.enabled:
+        return None
+
+    from zhixia.agent import (
+        AgentExecutor,
+        ReActAgent,
+        ToolCallingAgent,
+        ToolRegistry,
+    )
+
+    # 这里可以注册项目需要的工具
+    tools = ToolRegistry()
+    # 示例：注册天气工具（需要实际实现 WeatherTool）
+    # from zhixia.agent.tools.weather import WeatherTool
+    # tools.register(WeatherTool())
+
+    if config.agent.engine == "tool_calling":
+        agent = ToolCallingAgent(
+            llm_engine=llm_engine,
+            tools=tools,
+            max_new_tokens=config.llm.max_new_tokens,
+        )
+    else:
+        agent = ReActAgent(
+            llm_engine=llm_engine,
+            tools=tools,
+            max_new_tokens=config.llm.max_new_tokens,
+        )
+
+    return AgentExecutor(
+        agent=agent,
+        tools=tools,
+        max_iterations=config.agent.max_iterations,
+        early_stopping_method=config.agent.early_stopping_method,
+    )
+
+
 def create_wakeword_engine(config, project_root: Path):
     """创建唤醒词引擎。"""
     if not getattr(config, "wakeword", None) or not config.wakeword.enabled:
@@ -248,6 +287,7 @@ def main():
     player = ALSAAudioPlayer()
     rag = create_rag_retriever(settings)
     display = create_display(settings.display)
+    agent_executor = create_agent_executor(settings, llm)
 
     # 预热：提前加载模型并执行一次真实推理，消除首次请求冷启动
     if not settings.skip_warmup:
@@ -297,6 +337,7 @@ def main():
         audio_player=player,
         rag_retriever=rag,
         display=display,
+        agent_executor=agent_executor,
     )
 
     # 判断运行模式

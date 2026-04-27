@@ -100,6 +100,14 @@ class WakeWordConfig:
 
 
 @dataclass
+class AgentConfig:
+    enabled: bool = False
+    engine: str = "react"  # "react" | "tool_calling"
+    max_iterations: int = 5
+    early_stopping_method: str = "raise"  # "raise" | "force"
+
+
+@dataclass
 class AppSettings:
     asr: ASRConfig = field(default_factory=ASRConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
@@ -108,6 +116,7 @@ class AppSettings:
     audio: AudioConfig = field(default_factory=AudioConfig)
     display: DisplayConfig = field(default_factory=DisplayConfig)
     wakeword: WakeWordConfig = field(default_factory=WakeWordConfig)
+    agent: AgentConfig = field(default_factory=AgentConfig)
     log_level: str = "INFO"
     skip_warmup: bool = False
 

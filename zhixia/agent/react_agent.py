@@ -5,6 +5,8 @@
 - 单 Action：每次 LLM 调用只决策一个 Action。
 - 纯字符串交互：兼容任何遵循 base.py 接口的 LLMEngine。
 - 无外部依赖：不依赖 langchain 包。
+- **新增**：继承 Runnable 协议，支持 invoke / stream / LCEL 管道组合。
+- **新增**：支持流式 thought 输出（通过 callback 实时展示思考过程）。
 """
 
 from typing import Any, List, Optional
@@ -18,6 +20,7 @@ from zhixia.agent.base import (
 )
 from zhixia.agent.parser import ReActOutputParser
 from zhixia.agent.prompts import ReActPromptTemplate
+from zhixia.agent.runnable import RunnableConfig
 from zhixia.agent.tool import ToolRegistry
 from zhixia.llm.base import LLMEngine, LLMMessage
 
@@ -49,6 +52,10 @@ class ReActAgent(BaseAgent):
         self.output_parser = output_parser or ReActOutputParser()
         self.max_new_tokens = max_new_tokens
         self.stop_sequences = stop_sequences or ["Observation:"]
+
+    @property
+    def name(self) -> str:
+        return "ReActAgent"
 
     @property
     def input_keys(self) -> List[str]:
@@ -109,3 +116,57 @@ class ReActAgent(BaseAgent):
                     log=response,
                 )
         return decision
+
+    # -- Runnable 协议增强：流式思考 --
+
+    def stream_plan(
+        self,
+        intermediate_steps: List[AgentStep],
+        callbacks=None,
+        **kwargs: Any,
+    ):
+        """流式决策：yield 思考过程中的 token，最终返回决策结果。
+
+        注意：这要求底层 LLM 支持 stream_chat。Agent 的决策结果
+        只有在 LLM 输出完整后才能真正确定，所以 stream 主要用于
+        实时展示 "Agent 正在思考..." 的过程。
+        """
+        user_input = kwargs.get("input", "")
+        if not user_input:
+            raise ValueError("ReActAgent.stream_plan() 需要 kwargs['input']")
+
+        scratchpad = self.prompt_template.build_scratchpad(intermediate_steps)
+        if scratchpad:
+            scratchpad += "Thought: "
+
+        tool_desc = self.tools.format_tool_descriptions()
+        prompt_text = self.prompt_template.format(
+            tool_descriptions=tool_desc,
+            input=user_input,
+            agent_scratchpad=scratchpad,
+        )
+
+        messages = [LLMMessage(role="user", content=prompt_text)]
+
+        # 流式收集
+        buffer = []
+        for token in self.llm.stream_chat(messages, max_new_tokens=self.max_new_tokens):
+            buffer.append(token)
+            # 如果 token 包含 Thought 开头，可以实时 yield
+            if "Thought" in token or buffer:
+                # 简单策略：yield 所有 token
+                yield token
+
+        response = "".join(buffer)
+        decision = self.output_parser.parse(response)
+
+        # 容错处理
+        if isinstance(decision, AgentAction) and decision.tool not in self.tools:
+            decision = AgentFinish(
+                return_values={
+                    "text": f"抱歉，我没有 '{decision.tool}' 这个工具。"
+                    f"让我直接回答：{decision.thought or '我不太清楚该怎么帮你。'}"
+                },
+                log=response,
+            )
+        yield decision

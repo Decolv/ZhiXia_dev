@@ -19,6 +19,10 @@ from zhixia.asr.base import ASREngine, ASRResult
 from zhixia.audio.base import AudioPlayer
 from zhixia.config.settings import AppSettings
 from zhixia.display.base import DisplayOutput, DisplayPayload
+from zhixia.agent.base import AgentFinish
+from zhixia.agent.executor import AgentExecutor, AgentRunner
+from zhixia.agent.runnable import RunnableConfig
+from zhixia.agent.callbacks import CallbackManager, StreamingDisplayHandler
 from zhixia.llm.base import LLMEngine, LLMMessage, StructuredOutput
 from zhixia.llm.output_parser import _strip_thinking_tokens, get_format_instruction, parse_llm_output
 from zhixia.llm.rag.base import RAGContext, RAGRetriever
@@ -66,12 +70,14 @@ class VoicePipeline:
         audio_player: AudioPlayer,
         rag_retriever: Optional[RAGRetriever] = None,
         display: Optional[DisplayOutput] = None,
+        agent_executor: Optional[AgentExecutor] = None,
     ) -> None:
         self.config = config
         self.asr_engine = asr_engine
         self.llm_engine = llm_engine
         self.tts_engine = tts_engine
         self.audio_player = audio_player
+        self.agent_executor = agent_executor
 
         if rag_retriever is None:
             from zhixia.llm.rag.null_retriever import NullRAGRetriever
@@ -222,6 +228,57 @@ class VoicePipeline:
         def llm_worker():
             try:
                 timing_stats['llm']['start'] = time.perf_counter()
+
+                # ===== Agent 模式 =====
+                if self.agent_executor is not None:
+                    from zhixia.agent.state import AgentState
+
+                    agent_state = AgentState(messages=list(messages))
+                    callbacks = CallbackManager([LoggingHandler()])
+                    config = RunnableConfig(callbacks=callbacks, recursion_limit=5)
+
+                    final_text = ""
+                    first_event = True
+                    for step_state in self.agent_executor.stream(agent_state, config):
+                        if first_event:
+                            timing_stats['llm']['first_token_time'] = time.perf_counter() - timing_stats['llm']['start']
+                            print("✅ Agent: 首个决策已生成")
+                            first_event = False
+                        if step_state.status == "finished":
+                            for msg in reversed(step_state.messages):
+                                if msg.role == "assistant":
+                                    final_text = msg.content
+                                    break
+                            break
+                        elif step_state.status == "tool_call":
+                            print("🔧 Agent 正在调用工具...")
+                        elif step_state.status == "thinking":
+                            print("💭 Agent 正在思考...")
+
+                    # 分句送入 TTS
+                    if final_text:
+                        sentences = _split_sentences(final_text)
+                        if len(sentences) > 1:
+                            for s in sentences[:-1]:
+                                clean = _strip_thinking_tokens(s)
+                                if clean and len(clean) >= _MIN_CHUNK_LEN:
+                                    tts_queue.put(clean)
+                        tail = sentences[-1] if sentences else final_text
+                        clean_tail = _strip_thinking_tokens(tail)
+                        if clean_tail:
+                            tts_queue.put(clean_tail)
+                    else:
+                        tts_queue.put("抱歉，我没能找到答案。")
+
+                    full_output_holder.append(final_text)
+                    timing_stats['llm']['end'] = time.perf_counter()
+                    timing_stats['llm']['duration'] = timing_stats['llm']['end'] - timing_stats['llm']['start']
+                    timing_stats['llm']['tokens'] = len(final_text)
+                    if timing_stats['llm']['duration'] > 0:
+                        timing_stats['llm']['tokens_per_sec'] = timing_stats['llm']['tokens'] / timing_stats['llm']['duration']
+                    return
+
+                # ===== 直接 LLM 模式 =====
                 buffer = ""
                 raw_chunks = []
                 emotion_shown = False  # 标记 emotion 是否已显示

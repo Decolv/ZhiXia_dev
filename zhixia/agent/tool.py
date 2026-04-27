@@ -87,6 +87,16 @@ class ToolRegistry:
             lines.append(f"- {t.name}: {t.description}")
         return "\n".join(lines)
 
+    def to_json_schemas(self) -> List[Dict[str, Any]]:
+        """生成所有工具的 JSON Schema 列表（用于结构化工具调用）。"""
+        from zhixia.agent.tool_agent import ToolSchemaBuilder
+
+        return ToolSchemaBuilder.build_all(self)
+
+    def get_tool_names(self) -> List[str]:
+        """获取所有已注册工具的名称列表。"""
+        return list(self._tools.keys())
+
     def __contains__(self, name: str) -> bool:
         return name in self._tools
 
