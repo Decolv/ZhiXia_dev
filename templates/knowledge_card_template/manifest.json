@@ -1,0 +1,11 @@
+{
+    "name": "knowledge_template",
+    "display_name": "知识卡模板",
+    "version": "1.0.0",
+    "type": "knowledge",
+    "author": "ZhiXia Team",
+    "description": "Knowledge 卡最小可运行模板，展示知识检索规范",
+    "entrypoint": "card.py",
+    "dependencies": [],
+    "min_host_version": "0.1.0"
+}

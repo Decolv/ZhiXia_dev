@@ -67,7 +67,7 @@ bash run.sh
 python -m zhixia
 
 # 方式3: 使用插卡式Agent
-python mount_cards.py
+python scripts/mount_cards.py
 ```
 
 ## 项目架构
