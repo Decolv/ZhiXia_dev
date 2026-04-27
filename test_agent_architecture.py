@@ -87,10 +87,10 @@ FAIL = 0
 def _assert(label: str, condition: bool):
     global PASS, FAIL
     if condition:
-        print(f"  ✅ {label}")
+        print(f"  [OK] {label}")
         PASS += 1
     else:
-        print(f"  ❌ {label}")
+        print(f"  [FAIL] {label}")
         FAIL += 1
 
 
@@ -239,7 +239,7 @@ def test_tool_calling_agent_real():
 
     api_key = os.environ.get("KIMI_API_KEY", "")
     if not api_key:
-        print("  ⏭️ 跳过（未设置 KIMI_API_KEY）")
+        print("  [SKIP] 跳过（未设置 KIMI_API_KEY）")
         return
 
     llm = CloudLLMEngine(
@@ -330,6 +330,6 @@ if __name__ == "__main__":
     test_tool_calling_agent_real()
 
     print("\n" + "=" * 60)
-    print(f"测试完成: ✅ {PASS} 通过, ❌ {FAIL} 失败")
+    print(f"测试完成: [PASS] {PASS} 通过, [FAIL] {FAIL} 失败")
     print("=" * 60)
     sys.exit(0 if FAIL == 0 else 1)

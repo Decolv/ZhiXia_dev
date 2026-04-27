@@ -69,6 +69,12 @@ class SlotWatcher:
         self._last_signature = new_signature
         return True, card_root
 
+    def set_current_card(self, card: Any) -> None:
+        self._current_card = card
+
+    def clear_current_card(self) -> None:
+        self._current_card = None
+
     def _find_card_root(self) -> Optional[Path]:
         """查找槽位中的卡片根目录。
 
@@ -133,25 +139,29 @@ class CardLoader:
         """
         changes = {}
         for slot_id, watcher in self.watchers.items():
-            changed, card_root = watcher.detect_change()
-            if not changed:
-                continue
+            try:
+                changed, card_root = watcher.detect_change()
+                if not changed:
+                    continue
 
-            # 有变化：先卸载旧卡
-            old_card = self.mounted_cards.get(slot_id)
-            if old_card is not None:
-                self._unmount_card(slot_id, old_card)
-                changes[slot_id] = f"unmounted:{old_card.name}"
+                # 有变化：先卸载旧卡
+                old_card = self.mounted_cards.get(slot_id)
+                if old_card is not None:
+                    self._unmount_card(slot_id, old_card)
+                    changes[slot_id] = f"unmounted:{old_card.name}"
 
-            # 再挂载新卡
-            if card_root is not None:
-                new_card = self._mount_card(slot_id, card_root)
-                if new_card:
-                    changes[slot_id] = f"mounted:{new_card.name}"
+                # 再挂载新卡
+                if card_root is not None:
+                    new_card = self._mount_card(slot_id, card_root)
+                    if new_card:
+                        changes[slot_id] = f"mounted:{new_card.name}"
+                    else:
+                        changes[slot_id] = "mount_failed"
                 else:
-                    changes[slot_id] = "mount_failed"
-            else:
-                changes[slot_id] = "empty"
+                    changes[slot_id] = "empty"
+            except Exception as exc:
+                logger.exception("[%s] 槽位同步失败: %s", slot_id, exc)
+                changes[slot_id] = f"error:{exc}"
 
         return changes
 
@@ -184,25 +194,36 @@ class CardLoader:
             logger.error("[%s] manifest 加载失败", slot_id)
             return None
 
-        # 2. 动态导入卡片模块
+        # 2. 类型校验
+        slot_type = self.watchers[slot_id].slot_type
+        if slot_type != manifest.type:
+            logger.error(
+                "[%s] 卡片类型不匹配: 槽位要求 '%s'，但卡片是 '%s'",
+                slot_id, slot_type, manifest.type,
+            )
+            return None
+
+        # 3. 动态导入卡片模块
         card_instance = self._import_and_instantiate(manifest, card_root, slot_id)
         if card_instance is None:
             return None
 
-        # 3. 更新 host_context 的 card_root
+        # 4. 更新 host_context 的 card_root（保存旧值以便恢复）
+        old_card_root = self.host.card_root
         self.host.card_root = card_root
 
-        # 4. 调用生命周期
+        # 5. 调用生命周期
         try:
             card_instance.on_mount(self.host)
         except Exception as exc:
             logger.exception("[%s] on_mount 失败: %s", slot_id, exc)
+            self.host.card_root = old_card_root
             self._cleanup_modules(card_root)
             return None
 
         self.mounted_cards[slot_id] = card_instance
         watcher = self.watchers[slot_id]
-        watcher._current_card = card_instance
+        watcher.set_current_card(card_instance)
 
         logger.info("[%s] 卡片挂载成功: %s v%s", slot_id, manifest.name, manifest.version)
         return card_instance
@@ -217,16 +238,23 @@ class CardLoader:
         except Exception as exc:
             logger.exception("[%s] on_unmount 失败: %s", slot_id, exc)
 
-        # 2. 清理模块
+        # 2. 主机级兜底清理（即使卡片的 on_unmount 遗漏）
+        self.host.persona_holder.clear_overlay()
+        self.host.knowledge_hub.unregister_retriever(card.name)
+        self.host.knowledge_hub.unregister_assets(card.name)
+        for tool in list(self.host.tool_registry.list_tools()):
+            self.host.tool_registry.unregister(tool.name)
+
+        # 3. 清理模块
         self._cleanup_modules(card.card_root)
 
-        # 3. 从注册表移除
+        # 4. 从注册表移除
         if slot_id in self.mounted_cards:
             del self.mounted_cards[slot_id]
 
         watcher = self.watchers.get(slot_id)
         if watcher:
-            watcher._current_card = None
+            watcher.clear_current_card()
 
         logger.info("[%s] 卡片卸载完成: %s", slot_id, card.name)
 
@@ -278,16 +306,33 @@ class CardLoader:
     # -- 痕迹清除 --
 
     def _cleanup_modules(self, card_root: Path) -> None:
-        """从 sys.modules 中清除与卡片相关的模块。"""
+        """从 sys.modules 中清除与卡片相关的模块。
+
+        使用精确路径匹配（兼容 Python 3.8）。
+        同时清理子模块。
+        """
+        def _is_relative_to(path: Path, other: Path) -> bool:
+            try:
+                path.relative_to(other)
+                return True
+            except ValueError:
+                return False
+
         to_remove = []
-        card_path_str = str(card_root.resolve())
+        root_resolved = card_root.resolve()
 
         for name, mod in list(sys.modules.items()):
             if not name.startswith(self._module_prefix):
                 continue
             mod_file = getattr(mod, "__file__", None)
-            if mod_file and mod_file.startswith(card_path_str):
-                to_remove.append(name)
+            if not mod_file:
+                continue
+            try:
+                mod_path = Path(mod_file).resolve()
+                if _is_relative_to(mod_path, root_resolved):
+                    to_remove.append(name)
+            except (ValueError, OSError):
+                continue
 
         for name in to_remove:
             del sys.modules[name]

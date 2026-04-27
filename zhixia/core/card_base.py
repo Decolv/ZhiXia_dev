@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,7 +20,7 @@ from typing import Any, Dict, List, Optional
 
 from zhixia.agent.tool import ToolRegistry
 from zhixia.display.base import DisplayOutput
-from zhixia.llm.rag.base import RAGRetriever
+from zhixia.llm.rag.base import RAGContext, RAGRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -157,52 +158,66 @@ class KnowledgeHub:
     """管理知识卡提供的 RAG 检索器和多媒体资源。
 
     支持多张知识卡共存（知识并集），也支持替换。
+    线程安全：所有公共方法使用 RLock 保护。
     """
 
     def __init__(self) -> None:
         self._retrievers: Dict[str, RAGRetriever] = {}
         self._assets: Dict[str, Dict[str, Path]] = {}
+        self._lock = threading.RLock()
 
     def register_retriever(self, name: str, retriever: RAGRetriever) -> None:
-        self._retrievers[name] = retriever
+        with self._lock:
+            self._retrievers[name] = retriever
         logger.info("知识检索器已注册: %s", name)
 
     def unregister_retriever(self, name: str) -> None:
-        if name in self._retrievers:
-            del self._retrievers[name]
-            logger.info("知识检索器已注销: %s", name)
+        with self._lock:
+            if name in self._retrievers:
+                del self._retrievers[name]
+        logger.info("知识检索器已注销: %s", name)
 
     def retrieve(self, query: str, top_k: int = 3) -> List[str]:
-        """从所有已注册的知识检索器中查询。"""
+        """从所有已注册的知识检索器中查询。
+
+        单个检索器失败不影响其他检索器的结果。
+        """
         results = []
-        for name, retriever in self._retrievers.items():
+        with self._lock:
+            retrievers_snapshot = dict(self._retrievers)
+
+        for name, retriever in retrievers_snapshot.items():
             try:
                 context = retriever.retrieve(query, top_k)
-                if context and context.chunks:
+                if isinstance(context, RAGContext) and getattr(context, "chunks", None):
                     results.extend(context.chunks)
             except Exception as exc:
                 logger.warning("知识检索失败 [%s]: %s", name, exc)
         return results
 
     def register_assets(self, name: str, assets: Dict[str, Path]) -> None:
-        self._assets[name] = assets
+        with self._lock:
+            self._assets[name] = assets
         logger.info("资源已注册: %s (%d 个)", name, len(assets))
 
     def unregister_assets(self, name: str) -> None:
-        if name in self._assets:
-            del self._assets[name]
-            logger.info("资源已注销: %s", name)
+        with self._lock:
+            if name in self._assets:
+                del self._assets[name]
+        logger.info("资源已注销: %s", name)
 
     def get_asset(self, name: str) -> Optional[Path]:
         """按名称查找资源（跨所有知识卡）。"""
-        for card_assets in self._assets.values():
-            if name in card_assets:
-                return card_assets[name]
+        with self._lock:
+            for card_assets in self._assets.values():
+                if name in card_assets:
+                    return card_assets[name]
         return None
 
     def clear_all(self) -> None:
-        self._retrievers.clear()
-        self._assets.clear()
+        with self._lock:
+            self._retrievers.clear()
+            self._assets.clear()
         logger.info("KnowledgeHub 已清空")
 
 
@@ -244,8 +259,15 @@ class CardBase(ABC):
         ...
 
     def get_resource(self, relative_path: str) -> Path:
-        """获取卡片内的资源文件路径。"""
-        return self.card_root / relative_path
+        """获取卡片内的资源文件路径。
+
+        安全检查：防止路径穿越攻击。
+        """
+        target = (self.card_root / relative_path).resolve()
+        root = self.card_root.resolve()
+        if not str(target).startswith(str(root)):
+            raise ValueError(f"路径越界: {relative_path}")
+        return target
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(name={self.name!r}, version={self.manifest.version})"
@@ -314,6 +336,6 @@ class KnowledgeCard(CardBase, ABC):
     def get_documents(self) -> List[Path]:
         """返回知识文档路径列表（默认扫描 docs/ 目录）。"""
         docs_dir = self.card_root / "docs"
-        if not docs_dir.exists():
+        if not docs_dir.exists() or not docs_dir.is_dir():
             return []
         return sorted([p for p in docs_dir.iterdir() if p.is_file()])

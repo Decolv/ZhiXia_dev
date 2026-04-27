@@ -24,6 +24,7 @@ import queue
 import re
 import threading
 import time
+import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -138,6 +139,7 @@ class HostOrchestrator:
         # 缓存当前 Agent（避免每轮重复构建）
         self._current_agent: Optional[AgentExecutor] = None
         self._current_agent_signature: str = ""
+        self._agent_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # 公共接口
@@ -174,16 +176,16 @@ class HostOrchestrator:
         """
         t0 = time.perf_counter()
         print("\n" + "=" * 70)
-        print("🎙️  ZhiXia 插卡式 Agent — 对话回合")
+        print("️  ZhiXia 插卡式 Agent — 对话回合")
         print("=" * 70)
 
         # 1. 检查卡片变化
         changes = self.check_slots()
         mounted = self.card_loader.get_mounted_names()
         if mounted:
-            print(f"📇 已插卡: {', '.join(mounted)}")
+            print(f" 已插卡: {', '.join(mounted)}")
         else:
-            print("📭 无卡模式 — 基础对话")
+            print(" 无卡模式 — 基础对话")
 
         # 2. ASR
         print("\n[阶段 1/4] 语音识别 (ASR)")
@@ -193,7 +195,7 @@ class HostOrchestrator:
         if not asr_result.text:
             raise RuntimeError("语音识别失败")
         asr_duration = time.perf_counter() - t_asr
-        print(f'✅ 识别完成: "{asr_result.text}"')
+        print(f' 识别完成: "{asr_result.text}"')
         print(f"⏱️  ASR 耗时: {asr_duration:.3f}s")
 
         # 3. 构建 Agent（如果缓存失效）
@@ -201,10 +203,10 @@ class HostOrchestrator:
         print("-" * 70)
         agent = self._get_or_build_agent()
         if agent:
-            print(f"🤖 Agent 模式: {agent.agent.name}")
-            print(f"🛠️  可用工具: {[t.name for t in self.host_context.tool_registry.list_tools()]}")
+            print(f" Agent 模式: {agent.agent.name}")
+            print(f"️  可用工具: {[t.name for t in self.host_context.tool_registry.list_tools()]}")
         else:
-            print("💬 直接 LLM 对话模式")
+            print(" 直接 LLM 对话模式")
 
         # 4. 执行（Agent 或 直接 LLM）
         print("\n[阶段 3/4] AI 生成")
@@ -217,7 +219,7 @@ class HostOrchestrator:
             response_text = self._run_direct_llm(asr_result.text)
 
         gen_duration = time.perf_counter() - t_gen
-        print(f"✅ 生成完成: \"{response_text[:100]}...\"")
+        print(f" 生成完成: \"{response_text[:100]}...\"")
         print(f"⏱️  生成耗时: {gen_duration:.3f}s")
 
         # 5. TTS + Play
@@ -259,60 +261,69 @@ class HostOrchestrator:
         """获取或构建 Agent。
 
         如果卡片未变化，复用缓存的 Agent。
+        线程安全：使用锁保护缓存读写。
         """
-        signature = self._compute_agent_signature()
-        if self._current_agent and self._current_agent_signature == signature:
-            return self._current_agent
+        with self._agent_lock:
+            signature = self._compute_agent_signature()
+            if self._current_agent and self._current_agent_signature == signature:
+                return self._current_agent
 
-        tools = self.host_context.tool_registry
-        has_tools = len(tools.list_tools()) > 0
+            tools = self.host_context.tool_registry
+            has_tools = len(tools.list_tools()) > 0
 
-        if not has_tools:
-            # 无工具 = 无 Skill 卡，使用直接 LLM 模式
-            self._current_agent = None
+            if not has_tools:
+                # 无工具 = 无 Skill 卡，使用直接 LLM 模式
+                self._current_agent = None
+                self._current_agent_signature = signature
+                return None
+
+            # 根据配置选择 Agent 类型
+            agent_type = getattr(self.config, "agent", None)
+            engine_type = getattr(agent_type, "engine", "react") if agent_type else "react"
+            max_iter = getattr(agent_type, "max_iterations", 5) if agent_type else 5
+            stop_method = getattr(agent_type, "early_stopping_method", "raise") if agent_type else "raise"
+
+            if engine_type == "tool_calling":
+                agent = ToolCallingAgent(
+                    llm_engine=self.llm_engine,
+                    tools=tools,
+                    max_new_tokens=self.config.llm.max_new_tokens,
+                )
+            else:
+                agent = ReActAgent(
+                    llm_engine=self.llm_engine,
+                    tools=tools,
+                    max_new_tokens=self.config.llm.max_new_tokens,
+                )
+
+            executor = AgentExecutor(
+                agent=agent,
+                tools=tools,
+                max_iterations=max_iter,
+                early_stopping_method=stop_method,
+            )
+
+            self._current_agent = executor
             self._current_agent_signature = signature
-            return None
-
-        # 根据配置选择 Agent 类型
-        agent_type = getattr(self.config, "agent", None)
-        engine_type = getattr(agent_type, "engine", "react") if agent_type else "react"
-        max_iter = getattr(agent_type, "max_iterations", 5) if agent_type else 5
-        stop_method = getattr(agent_type, "early_stopping_method", "raise") if agent_type else "raise"
-
-        if engine_type == "tool_calling":
-            agent = ToolCallingAgent(
-                llm_engine=self.llm_engine,
-                tools=tools,
-                max_new_tokens=self.config.llm.max_new_tokens,
-            )
-        else:
-            agent = ReActAgent(
-                llm_engine=self.llm_engine,
-                tools=tools,
-                max_new_tokens=self.config.llm.max_new_tokens,
-            )
-
-        executor = AgentExecutor(
-            agent=agent,
-            tools=tools,
-            max_iterations=max_iter,
-            early_stopping_method=stop_method,
-        )
-
-        self._current_agent = executor
-        self._current_agent_signature = signature
-        return executor
+            return executor
 
     def _compute_agent_signature(self) -> str:
-        """计算当前 Agent 配置的签名（用于缓存）。"""
+        """计算当前 Agent 配置的签名（用于缓存）。
+
+        包含卡片名称和工具的类名，防止同名但不同实现的工具导致缓存命中错误。
+        """
         names = sorted(self.card_loader.get_mounted_names())
-        tools = sorted([t.name for t in self.host_context.tool_registry.list_tools()])
-        return f"cards:{names}:tools:{tools}"
+        tool_signatures = sorted([
+            f"{t.name}:{t.__class__.__name__}"
+            for t in self.host_context.tool_registry.list_tools()
+        ])
+        return f"cards:{names}:tools:{tool_signatures}"
 
     def _invalidate_agent_cache(self) -> None:
         """使 Agent 缓存失效。"""
-        self._current_agent = None
-        self._current_agent_signature = ""
+        with self._agent_lock:
+            self._current_agent = None
+            self._current_agent_signature = ""
 
     # ------------------------------------------------------------------
     # 执行模式
@@ -394,7 +405,7 @@ class HostOrchestrator:
         if not sentences:
             sentences = [text]
 
-        print(f"🗣️  合成 {len(sentences)} 句...")
+        print(f"️  合成 {len(sentences)} 句...")
         for i, sentence in enumerate(sentences):
             clean = _strip_thinking_tokens(sentence)
             if not clean or len(clean) < _MIN_CHUNK_LEN:

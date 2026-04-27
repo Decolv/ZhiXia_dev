@@ -19,10 +19,8 @@ from zhixia.asr.base import ASREngine, ASRResult
 from zhixia.audio.base import AudioPlayer
 from zhixia.config.settings import AppSettings
 from zhixia.display.base import DisplayOutput, DisplayPayload
-from zhixia.agent.base import AgentFinish
-from zhixia.agent.executor import AgentExecutor, AgentRunner
-from zhixia.agent.runnable import RunnableConfig
-from zhixia.agent.callbacks import CallbackManager, StreamingDisplayHandler
+from zhixia.agent.executor import AgentExecutor
+from zhixia.agent.callbacks import CallbackManager, LoggingHandler, StreamingDisplayHandler
 from zhixia.llm.base import LLMEngine, LLMMessage, StructuredOutput
 from zhixia.llm.output_parser import _strip_thinking_tokens, get_format_instruction, parse_llm_output
 from zhixia.llm.rag.base import RAGContext, RAGRetriever
@@ -100,7 +98,7 @@ class VoicePipeline:
     def process_audio(self, audio_path: Path) -> None:
         t0 = time.perf_counter()
         print("\n" + "=" * 70)
-        print("🎙️  ZhiXia 语音助手 - 流水线处理")
+        print("️  ZhiXia 语音助手 - 流水线处理")
         print("=" * 70)
 
         # 1. ASR
@@ -111,7 +109,7 @@ class VoicePipeline:
         if not asr_result.text:
             raise RuntimeError("语音识别失败")
         asr_duration = time.perf_counter() - t_asr
-        print(f"✅ 识别完成: \"{asr_result.text}\"")
+        print(f" 识别完成: \"{asr_result.text}\"")
         print(f"⏱️  ASR 耗时: {asr_duration:.3f}s")
 
         # 2. RAG（可选）
@@ -122,9 +120,9 @@ class VoicePipeline:
         # 3. LLM → TTS → Play 流水线
         print("\n[阶段 2/3] AI生成 + 语音合成 (流水线模式)")
         print("-" * 70)
-        print("🔄 LLM Worker: 启动中...")
-        print("🔄 TTS Worker: 等待中...")
-        print("🔄 Play Worker: 等待中...")
+        print(" LLM Worker: 启动中...")
+        print(" TTS Worker: 等待中...")
+        print(" Play Worker: 等待中...")
         full_text, timing_stats = self._run_streaming_pipeline(asr_result.text, rag_context)
 
         # 4. 解析最终输出（用于 display）
@@ -147,8 +145,8 @@ class VoicePipeline:
         # 5. 详细统计信息显示
         print("\n[阶段 3/3] 处理完成")
         print("-" * 70)
-        print(f"📝 完整回复: \"{structured.text}\"")
-        print(f"😊 情感标签: {structured.emotion}")
+        print(f" 完整回复: \"{structured.text}\"")
+        print(f" 情感标签: {structured.emotion}")
 
         total_duration = time.perf_counter() - t0
         print("\n⏱️  性能统计 (详细模式):")
@@ -200,6 +198,21 @@ class VoicePipeline:
         play_queue: queue.Queue = queue.Queue(maxsize=4)
         full_output_holder: List[str] = []
         errors: List[Exception] = []
+        _shutdown_event = threading.Event()
+        timing_lock = threading.Lock()
+
+        def _safe_put(q: queue.Queue, item, timeout: float = 2.0) -> bool:
+            """安全地放入队列，在超时或 shutdown 时返回 False。"""
+            while not _shutdown_event.is_set():
+                try:
+                    q.put(item, timeout=0.5)
+                    return True
+                except queue.Full:
+                    if errors:
+                        # 有其他 worker 已出错，放弃
+                        return False
+                    continue
+            return False
 
         # 详细计时统计
         timing_stats = {
@@ -242,7 +255,7 @@ class VoicePipeline:
                     for step_state in self.agent_executor.stream(agent_state, config):
                         if first_event:
                             timing_stats['llm']['first_token_time'] = time.perf_counter() - timing_stats['llm']['start']
-                            print("✅ Agent: 首个决策已生成")
+                            print(" Agent: 首个决策已生成")
                             first_event = False
                         if step_state.status == "finished":
                             for msg in reversed(step_state.messages):
@@ -251,9 +264,9 @@ class VoicePipeline:
                                     break
                             break
                         elif step_state.status == "tool_call":
-                            print("🔧 Agent 正在调用工具...")
+                            print(" Agent 正在调用工具...")
                         elif step_state.status == "thinking":
-                            print("💭 Agent 正在思考...")
+                            print(" Agent 正在思考...")
 
                     # 分句送入 TTS
                     if final_text:
@@ -290,7 +303,7 @@ class VoicePipeline:
                 for token in self.llm_engine.stream_chat(messages, self.config.llm.max_new_tokens):
                     if first_token:
                         timing_stats['llm']['first_token_time'] = time.perf_counter() - timing_stats['llm']['start']
-                        print("✅ LLM Worker: 首个token已生成")
+                        print(" LLM Worker: 首个token已生成")
                         first_token = False
                     raw_chunks.append(token)
                     buffer += token
@@ -399,86 +412,117 @@ class VoicePipeline:
             except Exception as e:
                 logger.exception("LLM worker 异常")
                 errors.append(e)
+                _shutdown_event.set()
             finally:
-                tts_queue.put(_SENTINEL)
+                _safe_put(tts_queue, _SENTINEL)
 
         def tts_worker():
             try:
-                timing_stats['tts']['start'] = time.perf_counter()
+                with timing_lock:
+                    timing_stats['tts']['start'] = time.perf_counter()
                 first_chunk = True
                 while True:
                     t_wait_start = time.perf_counter()
-                    item = tts_queue.get()
-                    timing_stats['tts']['queue_wait_time'] += time.perf_counter() - t_wait_start
+                    try:
+                        item = tts_queue.get(timeout=0.5)
+                    except queue.Empty:
+                        if _shutdown_event.is_set() or errors:
+                            break
+                        continue
+                    with timing_lock:
+                        timing_stats['tts']['queue_wait_time'] += time.perf_counter() - t_wait_start
                     if item is _SENTINEL:
                         break
                     # item 已经是纯文本（由 llm_worker 提取），直接合成
                     t = time.perf_counter()
                     wav = self.tts_engine.synthesize_to_bytes(item)
                     chunk_time = time.perf_counter() - t
-                    timing_stats['tts']['chunk_times'].append(chunk_time)
-                    timing_stats['tts']['chunks'] += 1
+                    with timing_lock:
+                        timing_stats['tts']['chunk_times'].append(chunk_time)
+                        timing_stats['tts']['chunks'] += 1
                     if first_chunk:
-                        timing_stats['tts']['first_chunk_time'] = chunk_time
-                        print("✅ TTS Worker: 首句合成完成")
+                        with timing_lock:
+                            timing_stats['tts']['first_chunk_time'] = chunk_time
+                        print("TTS Worker: 首句合成完成")
                         first_chunk = False
                     logger.debug("TTS 合成 %.2fs: %s", chunk_time, item[:30])
                     if wav:
-                        play_queue.put(wav)
-                timing_stats['tts']['end'] = time.perf_counter()
-                timing_stats['tts']['duration'] = timing_stats['tts']['end'] - timing_stats['tts']['start']
-                if timing_stats['tts']['chunks'] > 0:
-                    timing_stats['tts']['avg_chunk_time'] = sum(timing_stats['tts']['chunk_times']) / timing_stats['tts']['chunks']
+                        if not _safe_put(play_queue, wav):
+                            break
+                with timing_lock:
+                    timing_stats['tts']['end'] = time.perf_counter()
+                    timing_stats['tts']['duration'] = timing_stats['tts']['end'] - timing_stats['tts']['start']
+                    if timing_stats['tts']['chunks'] > 0:
+                        timing_stats['tts']['avg_chunk_time'] = sum(timing_stats['tts']['chunk_times']) / timing_stats['tts']['chunks']
             except Exception as e:
                 logger.exception("TTS worker 异常")
                 errors.append(e)
+                _shutdown_event.set()
             finally:
-                play_queue.put(_SENTINEL)
+                _safe_put(play_queue, _SENTINEL)
 
         def play_worker():
             first = True
             prebuffer = []
             try:
-                timing_stats['play']['start'] = time.perf_counter()
+                with timing_lock:
+                    timing_stats['play']['start'] = time.perf_counter()
                 while True:
                     t_wait_start = time.perf_counter()
-                    item = play_queue.get()
-                    timing_stats['play']['queue_wait_time'] += time.perf_counter() - t_wait_start
+                    try:
+                        item = play_queue.get(timeout=0.5)
+                    except queue.Empty:
+                        if _shutdown_event.is_set() or errors:
+                            break
+                        continue
+                    with timing_lock:
+                        timing_stats['play']['queue_wait_time'] += time.perf_counter() - t_wait_start
                     if item is _SENTINEL:
                         break
                     if first:
                         prebuffer.append(item)
                         if len(prebuffer) < _INITIAL_PLAY_BUFFER_CHUNKS:
                             continue
-                        timing_stats['play']['ttfp'] = time.perf_counter() - timing_stats['llm']['start']
-                        print(f"🔊 首句播放开始")
+                        llm_start = timing_stats['llm']['start']
+                        with timing_lock:
+                            if llm_start > 0:
+                                timing_stats['play']['ttfp'] = time.perf_counter() - llm_start
+                        print("首句播放开始")
                         first = False
                         while prebuffer:
                             buffered_item = prebuffer.pop(0)
                             self.audio_player.play_bytes(buffered_item, blocking=True)
-                            timing_stats['play']['chunks_played'] += 1
+                            with timing_lock:
+                                timing_stats['play']['chunks_played'] += 1
                             time.sleep(_INTER_CHUNK_GAP_SEC)
                         continue
                     self.audio_player.play_bytes(item, blocking=True)
-                    timing_stats['play']['chunks_played'] += 1
+                    with timing_lock:
+                        timing_stats['play']['chunks_played'] += 1
                     time.sleep(_INTER_CHUNK_GAP_SEC)
 
                 # 若总分片不足预缓冲阈值（例如只有1句），补播缓存内容
                 if prebuffer:
                     if first:
-                        timing_stats['play']['ttfp'] = time.perf_counter() - timing_stats['llm']['start']
-                        print(f"🔊 首句播放开始")
+                        llm_start = timing_stats['llm']['start']
+                        with timing_lock:
+                            if llm_start > 0:
+                                timing_stats['play']['ttfp'] = time.perf_counter() - llm_start
+                        print("首句播放开始")
                     while prebuffer:
                         buffered_item = prebuffer.pop(0)
                         self.audio_player.play_bytes(buffered_item, blocking=True)
-                        timing_stats['play']['chunks_played'] += 1
+                        with timing_lock:
+                            timing_stats['play']['chunks_played'] += 1
                         time.sleep(_INTER_CHUNK_GAP_SEC)
 
-                timing_stats['play']['end'] = time.perf_counter()
-                timing_stats['play']['duration'] = timing_stats['play']['end'] - timing_stats['play']['start']
+                with timing_lock:
+                    timing_stats['play']['end'] = time.perf_counter()
+                    timing_stats['play']['duration'] = timing_stats['play']['end'] - timing_stats['play']['start']
             except Exception as e:
                 logger.exception("Play worker 异常")
                 errors.append(e)
+                _shutdown_event.set()
 
         t_llm = threading.Thread(target=llm_worker, daemon=True, name="llm-worker")
         t_tts = threading.Thread(target=tts_worker, daemon=True, name="tts-worker")
@@ -488,9 +532,15 @@ class VoicePipeline:
         t_tts.start()
         t_play.start()
 
-        t_llm.join()
-        t_tts.join()
-        t_play.join()
+        # 使用超时 join，防止永久死锁
+        t_llm.join(timeout=120)
+        t_tts.join(timeout=120)
+        t_play.join(timeout=120)
+
+        # 如果有线程仍在运行，记录警告
+        for t in (t_llm, t_tts, t_play):
+            if t.is_alive():
+                logger.warning("Worker %s 超时未结束", t.name)
 
         if errors:
             raise errors[0]

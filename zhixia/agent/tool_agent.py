@@ -6,10 +6,10 @@
 3. 解析器直接提取 tool_call，无需复杂的正则匹配。
 
 相比传统 ReAct：
-- ✅ 更可靠：结构化输出避免格式解析错误。
-- ✅ 更快：LLM 不需要生成冗长的 Thought/Action 文本。
-- ✅ 更省 token：工具调用是紧凑的 JSON。
-- ⚠️ 要求 LLM 原生支持 function calling / tool_call。
+-  更可靠：结构化输出避免格式解析错误。
+-  更快：LLM 不需要生成冗长的 Thought/Action 文本。
+-  更省 token：工具调用是紧凑的 JSON。
+- ️ 要求 LLM 原生支持 function calling / tool_call。
 
 实现策略：
 - CloudLLM (KIMI)：原生支持 tool_choice + tools 参数。
