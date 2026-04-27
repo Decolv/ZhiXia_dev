@@ -97,6 +97,17 @@ class ToolRegistry:
         """获取所有已注册工具的名称列表。"""
         return list(self._tools.keys())
 
+    def unregister(self, name: str) -> bool:
+        """按名称注销工具。返回是否成功。"""
+        if name in self._tools:
+            del self._tools[name]
+            return True
+        return False
+
+    def clear(self) -> None:
+        """清空所有已注册工具。"""
+        self._tools.clear()
+
     def __contains__(self, name: str) -> bool:
         return name in self._tools
 
