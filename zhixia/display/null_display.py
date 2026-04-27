@@ -49,3 +49,15 @@ class NullDisplay(DisplayOutput):
         else:
             self._current_thinking_text = ""
             logger.debug("Display: thinking finished")
+
+    def set_eye_state(self, state: str) -> None:
+        """设置眼睛状态（空实现）。"""
+        logger.debug("Eye state set to: %s", state)
+
+    def set_eye_emotion(self, emotion: str) -> None:
+        """设置眼睛情绪（空实现）。"""
+        logger.debug("Eye emotion set to: %s", emotion)
+
+    def force_eye_blink(self) -> None:
+        """强制眼睛眨眼（空实现）。"""
+        pass

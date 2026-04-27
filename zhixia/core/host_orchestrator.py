@@ -61,27 +61,32 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class DisplayCallbackHandler(BaseCallbackHandler):
-    """将Agent思考过程实时显示到Display的回调处理器。"""
+    """将Agent思考过程实时显示到Display的回调处理器。
+
+    同时支持 Live2D 眼睛动画联动。
+    """
 
     def __init__(self, display: DisplayOutput) -> None:
         self.display = display
         self._current_run_id: Optional[str] = None
 
     def on_thinking_start(self, run_id: str, **kwargs: Any) -> None:
-        """开始思考时更新显示。"""
+        """开始思考时更新显示和眼睛状态。"""
         self._current_run_id = run_id
         self.display.update_thinking(True, "正在思考...")
         self.display.show(DisplayPayload(
             text="",
             emotion="thinking",
             is_thinking=True,
-            thinking_text="正在思考..."
+            thinking_text="正在思考...",
+            eye_state="thinking",
         ))
         print("[思考] 开始分析问题...")
 
     def on_thinking_end(self, run_id: str, **kwargs: Any) -> None:
-        """结束思考时更新显示。"""
+        """结束思考时更新显示和眼睛状态。"""
         self.display.update_thinking(False)
+        self.display.set_eye_state("neutral")
         print("[思考] 分析完成")
 
     def on_agent_thought(self, run_id: str, thought: str, **kwargs: Any) -> None:
@@ -90,7 +95,8 @@ class DisplayCallbackHandler(BaseCallbackHandler):
             text="",
             emotion="thinking",
             is_thinking=True,
-            thinking_text=thought
+            thinking_text=thought,
+            eye_state="thinking",
         ))
         print(f"[思考] {thought}")
 
@@ -104,12 +110,13 @@ class DisplayCallbackHandler(BaseCallbackHandler):
                 text="",
                 emotion="working",
                 is_thinking=True,
-                thinking_text=action_text
+                thinking_text=action_text,
+                eye_state="working",
             ))
             print(f"[工具] 调用 {action.tool}")
 
     def on_agent_finish(self, run_id: str, finish: Any, **kwargs: Any) -> None:
-        """播报完成。"""
+        """播报完成，恢复眼睛到自然状态。"""
         from zhixia.agent.base import AgentFinish
 
         if isinstance(finish, AgentFinish):
@@ -118,7 +125,9 @@ class DisplayCallbackHandler(BaseCallbackHandler):
                 text=text,
                 emotion="neutral",
                 is_thinking=False,
-                thinking_text=""
+                thinking_text="",
+                eye_state="neutral",
+                blink_override=True,  # 说完后眨眼一次
             ))
 
 
@@ -169,6 +178,7 @@ class HostOrchestrator:
         audio_player: AudioPlayer,
         display: Optional[DisplayOutput] = None,
         slot_paths: Optional[Dict[str, Tuple[Path, str]]] = None,
+        enable_live2d_eyes: bool = True,
     ) -> None:
         self.config = config
         self.asr_engine = asr_engine
@@ -176,9 +186,21 @@ class HostOrchestrator:
         self.tts_engine = tts_engine
         self.audio_player = audio_player
 
+        # 初始化显示输出
         if display is None:
-            from zhixia.display.null_display import NullDisplay
-            self.display = NullDisplay()
+            # 如果启用了 Live2D 眼睛，使用它作为默认显示
+            if enable_live2d_eyes:
+                try:
+                    from zhixia.display.live2d_display import Live2dEyeDisplay
+                    self.display = Live2dEyeDisplay(auto_start=True)
+                    logger.info("Live2D 眼睛显示已启用")
+                except Exception as exc:
+                    logger.warning("Live2D 眼睛显示启动失败: %s，使用空显示", exc)
+                    from zhixia.display.null_display import NullDisplay
+                    self.display = NullDisplay()
+            else:
+                from zhixia.display.null_display import NullDisplay
+                self.display = NullDisplay()
         else:
             self.display = display
 
@@ -317,9 +339,12 @@ class HostOrchestrator:
         print("=" * 70)
 
     def shutdown(self) -> None:
-        """关机：卸载所有卡片，清除痕迹。"""
+        """关机：卸载所有卡片，清除痕迹，停止眼睛显示。"""
         logger.info("主机编排器关闭中...")
         self.card_loader.force_unmount_all()
+        # 停止眼睛显示
+        if hasattr(self.display, "stop"):
+            self.display.stop()
         self.llm_engine.shutdown()
         logger.info("主机编排器已关闭")
 

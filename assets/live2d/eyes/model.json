@@ -1,0 +1,53 @@
+{
+    "name": "default_cute_eyes",
+    "display_name": "默认可爱眼睛",
+    "version": "1.0.0",
+    "description": "默认可爱风格眼睛模型，使用 Pygame 渲染",
+    "renderer": "pygame",
+    "config": {
+        "window_width": 300,
+        "window_height": 200,
+        "bg_color": [20, 20, 30],
+        "eye_style": "anime",
+        "eye_color": [100, 150, 255],
+        "pupil_color": [30, 30, 50],
+        "highlight_color": [255, 255, 255],
+        "eye_size": 40,
+        "eye_spacing": 80,
+        "blink_duration_ms": 120,
+        "blink_interval_ms": 3000,
+        "states": {
+            "neutral": {
+                "eye_open": 1.0,
+                "blink_interval_ms": 3000,
+                "pupil_movement": "slow"
+            },
+            "thinking": {
+                "eye_open": 0.7,
+                "blink_interval_ms": 4000,
+                "pupil_movement": "vertical"
+            },
+            "happy": {
+                "eye_open": 1.2,
+                "eye_curve": true,
+                "blink_interval_ms": 5000,
+                "pupil_movement": "slow"
+            },
+            "working": {
+                "eye_open": 1.0,
+                "blink_interval_ms": 2500,
+                "pupil_movement": "fast"
+            },
+            "sad": {
+                "eye_open": 0.6,
+                "blink_interval_ms": 5000,
+                "pupil_movement": "down"
+            },
+            "surprised": {
+                "eye_open": 1.5,
+                "blink_interval_ms": 1500,
+                "pupil_movement": "fast"
+            }
+        }
+    }
+}
