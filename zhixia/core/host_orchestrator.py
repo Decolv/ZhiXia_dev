@@ -44,6 +44,7 @@ from zhixia.audio.base import AudioPlayer
 from zhixia.config.settings import AppSettings
 from zhixia.core.card_base import HostContext, KnowledgeHub, PersonaHolder
 from zhixia.core.card_loader import CardLoader
+from zhixia.core.user_profile import UserProfile
 from zhixia.display.base import DisplayOutput, DisplayPayload
 from zhixia.llm.base import LLMEngine, LLMMessage
 from zhixia.llm.output_parser import _strip_thinking_tokens, parse_llm_output
@@ -187,6 +188,7 @@ class HostOrchestrator:
         tool_registry = ToolRegistry()
         persona_holder = PersonaHolder(config.llm.system_prompt)
         knowledge_hub = KnowledgeHub()
+        # 用户画像将在卡片挂载时加载
         self.host_context = HostContext(
             tool_registry=tool_registry,
             persona_holder=persona_holder,
@@ -398,9 +400,17 @@ class HostOrchestrator:
     # ------------------------------------------------------------------
 
     def _run_agent(self, agent: AgentExecutor, user_text: str) -> str:
-        """Agent 模式执行，集成思考播报。"""
+        """Agent 模式执行，集成思考播报和用户画像。"""
         # 构建初始状态
         system_prompt = self.host_context.persona_holder.current_persona
+        
+        # 注入用户画像（如果有）
+        user_profile = self.host_context.user_profile
+        if user_profile:
+            profile_text = user_profile.to_prompt_text()
+            if profile_text:
+                system_prompt += f"\n\n{profile_text}"
+
         messages = [LLMMessage(role="system", content=system_prompt)]
 
         # 添加知识检索（如果 Knowledge 卡已挂载）
@@ -448,6 +458,14 @@ class HostOrchestrator:
     def _run_direct_llm(self, user_text: str) -> str:
         """直接 LLM 模式（无卡 / 无工具时）。"""
         system_prompt = self.host_context.persona_holder.current_persona
+        
+        # 注入用户画像（如果有）
+        user_profile = self.host_context.user_profile
+        if user_profile:
+            profile_text = user_profile.to_prompt_text()
+            if profile_text:
+                system_prompt += f"\n\n{profile_text}"
+
         messages = [LLMMessage(role="system", content=system_prompt)]
 
         # 知识检索（知识卡可独立使用）

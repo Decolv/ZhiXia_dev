@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from zhixia.agent.tool import ToolRegistry
+from zhixia.core.user_profile import UserProfile
 from zhixia.display.base import DisplayOutput
 from zhixia.llm.rag.base import RAGContext, RAGRetriever
 
@@ -93,6 +94,9 @@ class HostContext:
 
     # 知识检索器（Knowledge 卡可注册/扩展 RAG）
     knowledge_hub: "KnowledgeHub"
+
+    # 用户画像（技能卡维护的用户特征和偏好）
+    user_profile: Optional[UserProfile] = None
 
     # 显示输出（卡片可推送自定义显示内容）
     display: Optional[DisplayOutput] = None

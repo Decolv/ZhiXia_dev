@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from zhixia.core.card_base import CardBase, CardManifest, HostContext
+from zhixia.core.user_profile import UserProfile
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +213,11 @@ class CardLoader:
         old_card_root = self.host.card_root
         self.host.card_root = card_root
 
-        # 5. 调用生命周期
+        # 5. 加载用户画像
+        self.host.user_profile = UserProfile(card_root=card_root)
+        logger.info("[%s] 用户画像已加载", slot_id)
+
+        # 6. 调用生命周期
         try:
             card_instance.on_mount(self.host)
         except Exception as exc:
@@ -232,23 +237,29 @@ class CardLoader:
         """卸载单张卡片。"""
         logger.info("开始卸载卡片 [%s]: %s", slot_id, card.name)
 
-        # 1. 调用生命周期
+        # 1. 保存用户画像
+        if self.host.user_profile:
+            self.host.user_profile.save()
+            logger.info("[%s] 用户画像已保存", slot_id)
+            self.host.user_profile = None
+
+        # 2. 调用生命周期
         try:
             card.on_unmount(self.host)
         except Exception as exc:
             logger.exception("[%s] on_unmount 失败: %s", slot_id, exc)
 
-        # 2. 主机级兜底清理（即使卡片的 on_unmount 遗漏）
+        # 3. 主机级兜底清理（即使卡片的 on_unmount 遗漏）
         self.host.persona_holder.clear_overlay()
         self.host.knowledge_hub.unregister_retriever(card.name)
         self.host.knowledge_hub.unregister_assets(card.name)
         for tool in list(self.host.tool_registry.list_tools()):
             self.host.tool_registry.unregister(tool.name)
 
-        # 3. 清理模块
+        # 4. 清理模块
         self._cleanup_modules(card.card_root)
 
-        # 4. 从注册表移除
+        # 5. 从注册表移除
         if slot_id in self.mounted_cards:
             del self.mounted_cards[slot_id]
 
