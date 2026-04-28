@@ -10,13 +10,13 @@ ZhiXia 插卡模拟器，用于将 Skill 卡和 Knowledge 卡挂载到指定槽�
 **用法:**
 ```bash
 # 插入 Skill 卡 + Knowledge 卡
-python scripts/mount_cards.py --skill skills/hnu_freshman --knowledge knowledge/hnu_campus
+python scripts/mount_cards.py --skill skills/your_skill --knowledge knowledge/your_knowledge
 
 # 只插入 Skill 卡
-python scripts/mount_cards.py --skill skills/hnu_freshman
+python scripts/mount_cards.py --skill skills/your_skill
 
 # 只插入 Knowledge 卡
-python scripts/mount_cards.py --knowledge knowledge/hnu_campus
+python scripts/mount_cards.py --knowledge knowledge/your_knowledge
 
 # 拔卡（清空所有槽位）
 python scripts/mount_cards.py --eject
