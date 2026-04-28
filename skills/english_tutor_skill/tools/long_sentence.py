@@ -1,0 +1,569 @@
+"""长难句助力器工具 - 帮助用户学习和理解长难句"""
+
+import os
+import re
+from typing import Optional, Dict, List, Any
+from zhixia.agent.tool import Tool
+
+
+class LongSentenceTool(Tool):
+    """长难句助力器工具：获取、解析和讲解长难句，帮助用户逐步理解复杂句子结构。
+
+    支持三种操作：
+    - get_sentence: 获取长难句及基础解析
+    - explain: 详细讲解特定语法点
+    - analyze: 完整分析句子结构
+    """
+
+    # 知识卡基础路径
+    KNOWLEDGE_BASE_PATH = "d:\\Code\\ZhiXia_dev\\skills\\english_tutor_knowledge\\docs\\sentences"
+
+    # 难度级别映射
+    DIFFICULTY_LEVELS = {
+        "beginner": "初级",
+        "intermediate": "中级",
+        "advanced": "高级"
+    }
+
+    # 来源映射
+    SOURCES = {
+        "economist": "经济学人",
+        "nytimes": "纽约时报"
+    }
+
+    def __init__(self, llm_engine=None):
+        super().__init__(
+            name="long_sentence",
+            description="""长难句助力器工具：获取、解析和讲解英语长难句。
+
+参数说明：
+- action: 操作类型 (get_sentence/explain/analyze)
+  * get_sentence: 获取长难句及基础解析
+  * explain: 详细讲解特定语法点
+  * analyze: 完整分析句子结构
+- difficulty: 难度级别 (beginner/intermediate/advanced)
+- source: 来源 (economist/nytimes)
+- sentence_id: 句子ID (如 "sentence1", "sentence2" 等)
+- grammar_point: 语法点名称 (explain时使用)
+
+使用示例：
+1. 获取中级难度的长难句：action=get_sentence, difficulty=intermediate
+2. 获取经济学人的长难句：action=get_sentence, source=economist
+3. 讲解特定语法点：action=explain, grammar_point=定语从句
+4. 分析特定句子：action=analyze, sentence_id=sentence1""",
+            func=self._execute,
+        )
+        self._llm_engine = llm_engine
+        self._sentences_cache: Dict[str, List[Dict[str, Any]]] = {}
+
+    def _execute(
+        self,
+        action: str = "get_sentence",
+        difficulty: Optional[str] = None,
+        source: Optional[str] = None,
+        sentence_id: Optional[str] = None,
+        grammar_point: Optional[str] = None
+    ) -> str:
+        """执行长难句工具操作。
+
+        Args:
+            action: 操作类型 (get_sentence/explain/analyze)
+            difficulty: 难度级别 (beginner/intermediate/advanced)
+            source: 来源 (economist/nytimes)
+            sentence_id: 句子ID
+            grammar_point: 语法点名称
+
+        Returns:
+            根据action返回相应的结果字符串
+        """
+        action = action.lower()
+
+        if action == "get_sentence":
+            return self._get_sentence(difficulty, source, sentence_id)
+        elif action == "explain":
+            return self._explain_grammar(grammar_point)
+        elif action == "analyze":
+            return self._analyze_sentence(difficulty, source, sentence_id)
+        else:
+            return f"【错误】不支持的操作类型：{action}。请使用 get_sentence、explain 或 analyze。"
+
+    def _load_sentences(self, file_path: str) -> List[Dict[str, Any]]:
+        """从markdown文件加载句子数据。
+
+        Args:
+            file_path: 文件路径
+
+        Returns:
+            句子列表，每个句子包含原句、翻译、语法分析和词汇
+        """
+        if file_path in self._sentences_cache:
+            return self._sentences_cache[file_path]
+
+        sentences = []
+        if not os.path.exists(file_path):
+            return sentences
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # 解析句子块 (## 句子X 开头的部分)
+        sentence_blocks = re.split(r'## 句子\d+', content)
+
+        for i, block in enumerate(sentence_blocks[1:], 1):  # 跳过第一个空块
+            sentence_data = self._parse_sentence_block(block, i)
+            if sentence_data:
+                sentences.append(sentence_data)
+
+        self._sentences_cache[file_path] = sentences
+        return sentences
+
+    def _parse_sentence_block(self, block: str, sentence_num: int) -> Optional[Dict[str, Any]]:
+        """解析单个句子块的内容。
+
+        Args:
+            block: 句子块文本
+            sentence_num: 句子编号
+
+        Returns:
+            解析后的句子数据字典
+        """
+        sentence_data = {
+            "id": f"sentence{sentence_num}",
+            "original": "",
+            "translation": "",
+            "grammar_analysis": "",
+            "vocabulary": []
+        }
+
+        # 提取原句
+        original_match = re.search(r'### 原句\s*\n([^\n]+)', block)
+        if original_match:
+            sentence_data["original"] = original_match.group(1).strip()
+
+        # 提取翻译
+        translation_match = re.search(r'### 翻译\s*\n([^#]+)', block)
+        if translation_match:
+            sentence_data["translation"] = translation_match.group(1).strip()
+
+        # 提取语法分析
+        grammar_match = re.search(r'### 语法分析\s*\n([^#]+)', block)
+        if grammar_match:
+            sentence_data["grammar_analysis"] = grammar_match.group(1).strip()
+
+        # 提取词汇
+        vocab_section = re.search(r'### 重点词汇\s*\n(.+?)(?=##|$)', block, re.DOTALL)
+        if vocab_section:
+            vocab_text = vocab_section.group(1)
+            vocab_items = re.findall(r'-\s*([^:]+):\s*(.+)', vocab_text)
+            sentence_data["vocabulary"] = [{"word": w.strip(), "meaning": m.strip()} for w, m in vocab_items]
+
+        return sentence_data if sentence_data["original"] else None
+
+    def _get_file_path(self, difficulty: Optional[str], source: Optional[str]) -> Optional[str]:
+        """根据参数确定要加载的文件路径。
+
+        Args:
+            difficulty: 难度级别
+            source: 来源
+
+        Returns:
+            文件路径或None
+        """
+        if difficulty and difficulty.lower() in self.DIFFICULTY_LEVELS:
+            return os.path.join(self.KNOWLEDGE_BASE_PATH, "by_difficulty", f"{difficulty.lower()}.md")
+        elif source and source.lower() in self.SOURCES:
+            return os.path.join(self.KNOWLEDGE_BASE_PATH, "by_source", f"{source.lower()}.md")
+        return None
+
+    def _get_sentence(
+        self,
+        difficulty: Optional[str],
+        source: Optional[str],
+        sentence_id: Optional[str]
+    ) -> str:
+        """获取长难句及基础解析。
+
+        Args:
+            difficulty: 难度级别
+            source: 来源
+            sentence_id: 句子ID
+
+        Returns:
+            格式化的句子信息
+        """
+        file_path = self._get_file_path(difficulty, source)
+
+        if not file_path:
+            available_options = []
+            if not difficulty and not source:
+                available_options = ["difficulty: beginner/intermediate/advanced", "source: economist/nytimes"]
+            else:
+                available_options = ["请检查参数是否正确"]
+            return f"【错误】请指定有效的难度级别或来源。\n可用选项：{', '.join(available_options)}"
+
+        sentences = self._load_sentences(file_path)
+
+        if not sentences:
+            return "【错误】未能加载句子数据，请检查知识库文件。"
+
+        # 如果指定了sentence_id，查找特定句子
+        if sentence_id:
+            target = None
+            for s in sentences:
+                if s["id"] == sentence_id.lower():
+                    target = s
+                    break
+            if target:
+                return self._format_sentence_basic(target)
+            else:
+                available_ids = ", ".join([s["id"] for s in sentences])
+                return f"【错误】未找到句子 {sentence_id}。\n可用句子ID：{available_ids}"
+
+        # 否则返回第一个句子
+        return self._format_sentence_basic(sentences[0])
+
+    def _format_sentence_basic(self, sentence: Dict[str, Any]) -> str:
+        """格式化基础句子信息。
+
+        Args:
+            sentence: 句子数据字典
+
+        Returns:
+            格式化的字符串
+        """
+        result = [
+            "📚 长难句学习",
+            "",
+            f"【原句】{sentence['original']}",
+            "",
+            f"【翻译】{sentence['translation']}",
+            "",
+            "【语法结构】",
+            sentence['grammar_analysis'],
+            "",
+            "【重点词汇】"
+        ]
+
+        for vocab in sentence['vocabulary']:
+            result.append(f"  • {vocab['word']}: {vocab['meaning']}")
+
+        result.extend([
+            "",
+            "💡 学习提示：",
+            "  1. 先通读原句，尝试理解大意",
+            "  2. 对照翻译，理解句子结构",
+            "  3. 学习重点词汇和语法点",
+            "  4. 如需详细分析，使用 action=analyze",
+            f"  5. 句子ID: {sentence['id']}，可用于后续分析"
+        ])
+
+        return "\n".join(result)
+
+    def _explain_grammar(self, grammar_point: Optional[str]) -> str:
+        """详细讲解语法知识点。
+
+        Args:
+            grammar_point: 语法点名称
+
+        Returns:
+            语法讲解内容
+        """
+        if not grammar_point:
+            return "【提示】请指定要讲解的语法点，例如：grammar_point=定语从句"
+
+        # 语法知识库
+        grammar_knowledge = {
+            "定语从句": {
+                "definition": "定语从句是用来修饰名词或代词的从句，通常由关系代词(who, whom, whose, which, that)或关系副词(when, where, why)引导。",
+                "types": [
+                    "限制性定语从句：对先行词起限定作用，去掉后主句意思不完整",
+                    "非限制性定语从句：对先行词起补充说明作用，用逗号隔开"
+                ],
+                "examples": [
+                    "The book that I bought yesterday is very interesting.",
+                    "The man who is standing there is my teacher."
+                ],
+                "tips": "识别定语从句的关键是找到关系词，然后确定它指代的先行词是什么。"
+            },
+            "状语从句": {
+                "definition": "状语从句在复合句中充当状语，修饰主句的动词、形容词或副词，表示时间、地点、原因、条件、目的、结果等。",
+                "types": [
+                    "时间状语从句：when, while, as, before, after, since, until等",
+                    "条件状语从句：if, unless, as long as等",
+                    "原因状语从句：because, since, as等",
+                    "让步状语从句：although, though, even though等"
+                ],
+                "examples": [
+                    "If it rains tomorrow, we will stay at home.",
+                    "Although he is young, he knows a lot."
+                ],
+                "tips": "状语从句可以放在主句前或主句后，放在前面时常用逗号隔开。"
+            },
+            "名词性从句": {
+                "definition": "名词性从句在句中充当名词的作用，可以作主语、宾语、表语或同位语。",
+                "types": [
+                    "主语从句：在句中作主语",
+                    "宾语从句：在句中作宾语",
+                    "表语从句：在句中作表语",
+                    "同位语从句：解释说明名词的内容"
+                ],
+                "examples": [
+                    "What he said is true. (主语从句)",
+                    "I believe that he will come. (宾语从句)"
+                ],
+                "tips": "名词性从句通常由that, whether, if或疑问词引导。"
+            },
+            "非谓语动词": {
+                "definition": "非谓语动词是指在句中不作谓语的动词形式，包括不定式、动名词和分词。",
+                "types": [
+                    "不定式(to do)：表示目的、将来或具体动作",
+                    "动名词(doing)：表示一般性、习惯性动作",
+                    "现在分词(doing)：表示主动、进行",
+                    "过去分词(done)：表示被动、完成"
+                ],
+                "examples": [
+                    "To learn English well is important.",
+                    "I enjoy reading books.",
+                    "The man standing there is my teacher."
+                ],
+                "tips": "非谓语动词可以充当多种句子成分，是英语语法中的重点和难点。"
+            },
+            "倒装": {
+                "definition": "倒装是指将句子的主语和谓语位置互换，或将谓语的一部分提到主语之前。",
+                "types": [
+                    "完全倒装：整个谓语放在主语之前",
+                    "部分倒装：只将助动词/情态动词放在主语之前"
+                ],
+                "examples": [
+                    "Here comes the bus. (完全倒装)",
+                    "Never have I seen such a beautiful sight. (部分倒装)"
+                ],
+                "tips": "否定词开头、only+状语开头、so/neither/nor等情况下常使用倒装。"
+            },
+            "虚拟语气": {
+                "definition": "虚拟语气用来表示与事实相反、不可能发生或可能性很小的情况。",
+                "types": [
+                    "与现在事实相反：if + 过去式, would + 动词原形",
+                    "与过去事实相反：if + had done, would have done",
+                    "与将来事实相反：if + should/were to, would + 动词原形"
+                ],
+                "examples": [
+                    "If I were you, I would study harder.",
+                    "If he had come yesterday, he would have met her."
+                ],
+                "tips": "虚拟语气中，be动词通常用were，不用was（第一、三人称单数也如此）。"
+            },
+            "独立主格": {
+                "definition": "独立主格结构是由名词/代词+非谓语动词/形容词/副词/介词短语构成，在句中作状语，表示时间、原因、条件、伴随等。",
+                "structure": "名词/代词 + (doing/done/to do/adj./adv./prep. phrase)",
+                "examples": [
+                    "Weather permitting, we will go camping.",
+                    "All things considered, his proposal is reasonable."
+                ],
+                "tips": "独立主格结构有自己的逻辑主语，与主句主语不同。"
+            },
+            "强调句": {
+                "definition": "强调句用于突出句子的某一成分，基本结构为：It is/was + 被强调部分 + that/who + 其他。",
+                "usage": "可以强调主语、宾语、状语，但不能强调谓语。",
+                "examples": [
+                    "It was John who broke the window.",
+                    "It was yesterday that I met him."
+                ],
+                "tips": "去掉It is/was...that后，剩下的部分应该能构成完整的句子。"
+            },
+            "插入语": {
+                "definition": "插入语是插在句子中间的成分，对句子进行补充说明，去掉后不影响句子的完整性。",
+                "types": [
+                    "副词作插入语：however, therefore, obviously等",
+                    "短语作插入语：in fact, for example等",
+                    "从句作插入语：I think, I believe等"
+                ],
+                "examples": [
+                    "This book, however, is too difficult for beginners.",
+                    "He is, in fact, a very talented musician."
+                ],
+                "tips": "阅读时可以先忽略插入语，抓住句子主干。"
+            },
+            "同位语": {
+                "definition": "同位语是对名词或代词进行解释说明的成分，与被修饰词指同一人或事物。",
+                "types": [
+                    "名词作同位语",
+                    "短语作同位语",
+                    "从句作同位语（同位语从句）"
+                ],
+                "examples": [
+                    "My friend Tom is coming.",
+                    "The news that he won the prize surprised us."
+                ],
+                "tips": "同位语从句通常由that引导，that在从句中不充当成分。"
+            }
+        }
+
+        # 查找匹配的语法点
+        matched_point = None
+        for key, value in grammar_knowledge.items():
+            if key in grammar_point or grammar_point in key:
+                matched_point = value
+                matched_name = key
+                break
+
+        if not matched_point:
+            available_points = ", ".join(grammar_knowledge.keys())
+            return f"【提示】暂未找到'{grammar_point}'的详细讲解。\n\n可用语法点：{available_points}\n\n您可以使用LLM获取更详细的讲解。"
+
+        # 格式化输出
+        result = [
+            f"📖 语法点讲解：{matched_name}",
+            "",
+            f"【定义】{matched_point['definition']}",
+            ""
+        ]
+
+        if 'types' in matched_point:
+            result.append("【分类/用法】")
+            for t in matched_point['types']:
+                result.append(f"  • {t}")
+            result.append("")
+
+        if 'structure' in matched_point:
+            result.append(f"【结构】{matched_point['structure']}")
+            result.append("")
+
+        if 'usage' in matched_point:
+            result.append(f"【用法】{matched_point['usage']}")
+            result.append("")
+
+        result.append("【例句】")
+        for i, ex in enumerate(matched_point['examples'], 1):
+            result.append(f"  {i}. {ex}")
+        result.append("")
+
+        result.append(f"💡 学习技巧：{matched_point['tips']}")
+
+        return "\n".join(result)
+
+    def _analyze_sentence(
+        self,
+        difficulty: Optional[str],
+        source: Optional[str],
+        sentence_id: Optional[str]
+    ) -> str:
+        """完整分析句子结构。
+
+        Args:
+            difficulty: 难度级别
+            source: 来源
+            sentence_id: 句子ID
+
+        Returns:
+            详细的句子分析报告
+        """
+        file_path = self._get_file_path(difficulty, source)
+
+        if not file_path:
+            return "【错误】请指定有效的难度级别(beginner/intermediate/advanced)或来源(economist/nytimes)。"
+
+        sentences = self._load_sentences(file_path)
+
+        if not sentences:
+            return "【错误】未能加载句子数据，请检查知识库文件。"
+
+        # 查找目标句子
+        target = None
+        if sentence_id:
+            for s in sentences:
+                if s["id"] == sentence_id.lower():
+                    target = s
+                    break
+            if not target:
+                available_ids = ", ".join([s["id"] for s in sentences])
+                return f"【错误】未找到句子 {sentence_id}。\n可用句子ID：{available_ids}"
+        else:
+            target = sentences[0]
+
+        # 构建详细分析
+        result = [
+            "🔍 长难句深度分析",
+            "",
+            f"【原句】{target['original']}",
+            "",
+            f"【翻译】{target['translation']}",
+            "",
+            "=" * 50,
+            "",
+            "📋 逐步解析：",
+            "",
+            "第一步：识别句子主干",
+            "  • 找出主语、谓语、宾语（或表语）",
+            "  • 暂时忽略修饰成分，理解核心意思",
+            "",
+            "第二步：分析从句和修饰成分",
+            f"  {target['grammar_analysis']}",
+            "",
+            "第三步：理解逻辑关系",
+            "  • 确定各成分之间的逻辑联系",
+            "  • 理解作者想表达的核心信息",
+            "",
+            "=" * 50,
+            "",
+            "📚 重点词汇详解："
+        ]
+
+        for vocab in target['vocabulary']:
+            result.append(f"  • {vocab['word']}")
+            result.append(f"    释义：{vocab['meaning']}")
+            result.append("")
+
+        result.extend([
+            "=" * 50,
+            "",
+            "💡 学习建议：",
+            "  1. 背诵原句，培养语感",
+            "  2. 模仿造句，运用所学语法",
+            "  3. 定期复习，巩固记忆",
+            "  4. 如需讲解特定语法点，使用 action=explain",
+            f"  5. 句子ID: {target['id']}"
+        ])
+
+        # 如果有LLM引擎，添加智能分析
+        if self._llm_engine:
+            result.extend([
+                "",
+                "🤖 AI 深度分析：",
+                "  正在生成..."
+            ])
+            # 这里可以调用LLM进行更深入的分析
+
+        return "\n".join(result)
+
+    def get_all_sentences(self, difficulty: Optional[str] = None, source: Optional[str] = None) -> List[Dict[str, Any]]:
+        """获取所有句子列表（用于外部调用）。
+
+        Args:
+            difficulty: 难度级别
+            source: 来源
+
+        Returns:
+            句子列表
+        """
+        file_path = self._get_file_path(difficulty, source)
+        if file_path:
+            return self._load_sentences(file_path)
+        return []
+
+    def get_sentence_by_id(self, sentence_id: str, difficulty: Optional[str] = None, source: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """根据ID获取特定句子（用于外部调用）。
+
+        Args:
+            sentence_id: 句子ID
+            difficulty: 难度级别
+            source: 来源
+
+        Returns:
+            句子数据或None
+        """
+        sentences = self.get_all_sentences(difficulty, source)
+        for s in sentences:
+            if s["id"] == sentence_id.lower():
+                return s
+        return None

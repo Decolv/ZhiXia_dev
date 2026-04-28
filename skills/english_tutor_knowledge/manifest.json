@@ -1,0 +1,13 @@
+{
+  "name": "english_tutor_knowledge",
+  "display_name": "英语考试知识库",
+  "description": "英语考试知识卡，包含听力、写作、词汇和长难句等学习资料",
+  "version": "1.0.0",
+  "author": "ZhiXia",
+  "card_type": "knowledge",
+  "entry_point": "card.py",
+  "class_name": "EnglishTutorKnowledge",
+  "dependencies": [],
+  "tags": ["english", "exam", "cet4", "cet6", "ielts", "learning"],
+  "docs_dir": "docs"
+}

@@ -1,0 +1,13 @@
+{
+  "name": "english_tutor",
+  "display_name": "英语考试辅导助手",
+  "description": "专业的英语考试辅导助手，提供考试规划、听力训练、长难句解析、词汇记忆、作文辅导等功能",
+  "version": "1.0.0",
+  "author": "ZhiXia",
+  "entry_point": "card.py",
+  "card_class": "EnglishTutorSkill",
+  "tags": ["英语", "考试", "学习", "辅导"],
+  "icon": "📚",
+  "supported_languages": ["zh", "en"],
+  "min_zhixia_version": "0.1.0"
+}
