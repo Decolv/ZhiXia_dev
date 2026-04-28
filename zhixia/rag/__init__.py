@@ -18,11 +18,11 @@
     docs = splitter.split_file(Path("history.md"))
 
     store = ChromaStore(
-        persist_dir=Path(".cache/vectors/hnu_campus"),
-        collection_name="hnu_campus",
+        persist_dir=Path(".cache/vectors/my_knowledge"),
+        collection_name="my_knowledge",
     )
     store.build_index(docs)
-    results = store.query("岳麓书院的历史", top_k=3)
+    results = store.query("知识库查询示例", top_k=3)
 """
 
 from zhixia.rag.chroma_store import ChromaStore

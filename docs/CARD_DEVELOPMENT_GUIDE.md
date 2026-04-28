@@ -7,7 +7,12 @@
 ## 核心原则
 
 ### 1. 自包含原则
-**卡片必须是自包含的。** 将卡片目录复制到任意机器的 `cards/slot_a/`（Skill）或 `cards/slot_b/`（Knowledge）后，无需修改任何代码即可运行。
+**卡片必须是自包含的。** 将卡片目录复制到任意机器的 `cards/slot_a/`、`cards/slot_b/`、`cards/slot_c/` 或 `cards/slot_d/` 后，无需修改任何代码即可运行。
+
+> **槽位设计**：主机默认提供 4 个通用槽位，不强制限定类型。你可以自由组合，例如：
+> - `slot_a` = Skill 卡（提供工具）
+> - `slot_b` / `slot_c` / `slot_d` = Knowledge 卡（提供知识库）
+> - 或者多张 Skill 卡同时工作（工具合并）
 
 ### 2. 禁止硬编码项目包路径
 **卡片内部模块间的导入，不得使用项目级包路径前缀。**
@@ -51,7 +56,7 @@ from zhixia.llm.rag.base import RAGRetriever
 ### Skill 卡结构
 
 ```
-my_skill/                    # 卡片根目录（复制到 cards/slot_a/ 下）
+my_skill/                    # 卡片根目录（复制到任意槽位，如 cards/slot_a/）
 ├── manifest.json            # 卡片元数据（必填）
 ├── card.py                  # 卡片入口类（必填）
 ├── persona.json             # 人设配置（可选）
@@ -66,7 +71,7 @@ my_skill/                    # 卡片根目录（复制到 cards/slot_a/ 下）
 ### Knowledge 卡结构
 
 ```
-my_knowledge/                # 卡片根目录（复制到 cards/slot_b/ 下）
+my_knowledge/                # 卡片根目录（复制到任意槽位，如 cards/slot_b/）
 ├── manifest.json            # 卡片元数据（必填）
 ├── card.py                  # 卡片入口类（必填）
 ├── docs/                    # 知识文档（必填）
@@ -300,20 +305,33 @@ class CompanyKnowledge(KnowledgeCard):
 开发完卡片后，使用以下步骤验证自包含性：
 
 ```bash
-# 1. 插卡
-python scripts/mount_cards.py --skill templates/skill_card_template
+# 1. 插卡（支持任意槽位组合）
+python scripts/mount_cards.py --slot slot_a templates/skill_card_template
+python scripts/mount_cards.py --slot slot_b templates/knowledge_card_template
 
 # 2. 临时隐藏源代码（模拟卡片独立运行）
-mv skills/hnu_freshman skills/hnu_freshman_backup
+mv templates/skill_card_template templates/skill_card_template_backup
 
 # 3. 运行主机
 python -m zhixia
 
 # 4. 验证通过后恢复
-mv skills/hnu_freshman_backup skills/hnu_freshman
+mv templates/skill_card_template_backup templates/skill_card_template
 ```
 
-如果卡片正确实现了自包含导入，即使 `skills/` 目录被隐藏，卡片仍能从 `cards/slot_a/` 正常加载。
+如果卡片正确实现了自包含导入，即使 `templates/` 目录被隐藏，卡片仍能从 `cards/slot_a/` 正常加载。
+
+### 多知识卡搭配验证
+
+验证一个 Skill 卡搭配多张 Knowledge 卡：
+
+```bash
+# 插入 1 张 Skill 卡 + 3 张 Knowledge 卡
+python scripts/mount_cards.py --slot slot_a skills/english_tutor_skill
+python scripts/mount_cards.py --slot slot_b skills/english_tutor_knowledge
+python scripts/mount_cards.py --slot slot_c knowledge/another_knowledge
+python scripts/mount_cards.py --slot slot_d knowledge/yet_another
+```
 
 ---
 

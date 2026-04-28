@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple, Union
 
 from zhixia.agent.tool import ToolRegistry
-from zhixia.core.user_profile import UserProfile
 from zhixia.display.base import DisplayOutput
 from zhixia.llm.rag.base import RAGContext, RAGRetriever
 
@@ -205,7 +204,11 @@ class HostContext:
 
     插卡时，HostOrchestrator 构造此对象传给 card.on_mount()，
     卡片通过此对象注册工具、人设、知识等。
-    
+
+    注意：HostContext 本身不包含卡片特定状态（如 card_root、user_profile）。
+    每张卡片应通过 CardBase.card_root 访问自己的资源目录，
+    并在 on_mount / on_unmount 中自行管理生命周期。
+
     线程安全：
     - response_processors 列表使用锁保护
     """
@@ -218,9 +221,6 @@ class HostContext:
 
     # 知识检索器（Knowledge 卡可注册/扩展 RAG）
     knowledge_hub: "KnowledgeHub"
-
-    # 用户画像（技能卡维护的用户特征和偏好）
-    user_profile: Optional[UserProfile] = None
 
     # 显示输出（卡片可推送自定义显示内容）
     display: Optional[DisplayOutput] = None
@@ -236,9 +236,6 @@ class HostContext:
 
     # LLM引擎（工具需要调用LLM智能生成答案）
     llm_engine: Optional[Any] = None
-
-    # 卡片根目录（卡片可读取自己的资源文件）
-    card_root: Optional[Path] = None
 
     def __post_init__(self) -> None:
         self._processors_lock = threading.RLock()
@@ -351,12 +348,19 @@ class KnowledgeHub:
                 del self._retrievers[name]
         logger.info("知识检索器已注销: %s", name)
 
-    def retrieve(self, query: str, top_k: int = 3) -> List[str]:
+    def retrieve(self, query: str, top_k: int = 3) -> RAGContext:
         """从所有已注册的知识检索器中查询。
+
+        返回的 RAGContext 包含所有知识卡合并后的结果，
+        sources 字段记录每个 chunk 的来源卡片名称，
+        实现技能卡与知识卡的解耦搭配。
 
         单个检索器失败不影响其他检索器的结果。
         """
-        results = []
+        all_chunks: List[str] = []
+        all_sources: List[str] = []
+        source_names: List[str] = []
+
         with self._lock:
             retrievers_snapshot = dict(self._retrievers)
 
@@ -364,10 +368,17 @@ class KnowledgeHub:
             try:
                 context = retriever.retrieve(query, top_k)
                 if isinstance(context, RAGContext) and getattr(context, "chunks", None):
-                    results.extend(context.chunks)
+                    all_chunks.extend(context.chunks)
+                    source_names.append(name)
+                    all_sources.extend([name] * len(context.chunks))
             except Exception as exc:
                 logger.warning("知识检索失败 [%s]: %s", name, exc)
-        return results
+
+        return RAGContext(
+            chunks=all_chunks,
+            source_description=", ".join(source_names) if source_names else "",
+            sources=all_sources,
+        )
 
     def register_assets(self, name: str, assets: Dict[str, Path]) -> None:
         with self._lock:

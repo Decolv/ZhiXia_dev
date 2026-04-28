@@ -9,6 +9,7 @@ from typing import List
 class RAGContext:
     chunks: List[str] = field(default_factory=list)
     source_description: str = ""
+    sources: List[str] = field(default_factory=list)  # 每个 chunk 对应的来源名称
 
 
 class RAGRetriever(ABC):

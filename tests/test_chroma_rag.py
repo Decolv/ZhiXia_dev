@@ -6,10 +6,12 @@
 注意: 若未安装 chromadb/sentence-transformers，测试会自动降级到关键词检索模式。
 """
 
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
-_PROJECT_ROOT = Path(__file__).resolve().parent
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
@@ -88,8 +90,8 @@ def test_chroma_store_with_mock():
     print("-" * 60)
 
     store = ChromaStore(
-        persist_dir=Path(".cache/test_vectors_hnu"),
-        collection_name="test_hnu",
+        persist_dir=Path(".cache/test_vectors_demo"),
+        collection_name="test_demo",
     )
 
     if not store.is_available():
@@ -98,10 +100,10 @@ def test_chroma_store_with_mock():
 
     # 构建索引
     chunks = [
-        DocumentChunk(id="h_001", text="岳麓书院创建于976年，是中国四大书院之一。", metadata={"source": "history"}),
-        DocumentChunk(id="h_002", text="湖南大学起源于岳麓书院，1903年改制为湖南高等学堂。", metadata={"source": "history"}),
-        DocumentChunk(id="b_001", text="复临舍是湖南大学最古老的教学楼之一，建于1930年代。", metadata={"source": "buildings"}),
-        DocumentChunk(id="l_001", text="天马美食街位于天马学生公寓旁，夜宵非常丰富。", metadata={"source": "life"}),
+        DocumentChunk(id="d_001", text="岳麓书院创建于976年，是中国四大书院之一。", metadata={"source": "history"}),
+        DocumentChunk(id="d_002", text="湖南大学起源于岳麓书院，1903年改制为湖南高等学堂。", metadata={"source": "history"}),
+        DocumentChunk(id="d_003", text="复临舍是湖南大学最古老的教学楼之一，建于1930年代。", metadata={"source": "buildings"}),
+        DocumentChunk(id="d_004", text="天马美食街位于天马学生公寓旁，夜宵非常丰富。", metadata={"source": "life"}),
     ]
 
     try:
@@ -127,57 +129,55 @@ def test_chroma_store_with_mock():
 
     # 删除
     store.delete()
-    _assert("删除后 persist_dir 不存在", not Path(".cache/test_vectors_hnu").exists())
+    _assert("删除后 persist_dir 不存在", not Path(".cache/test_vectors_demo").exists())
 
 
 def test_knowledge_card_integration():
-    """测试 KnowledgeCard 集成（模拟插卡）。"""
+    """测试 KnowledgeCard 集成（模拟插卡，使用模板知识卡）。"""
     print("\n" + "=" * 60)
     print("测试 4: KnowledgeCard 集成（模拟插卡）")
     print("-" * 60)
 
-    import subprocess
-    subprocess.run(
-        [sys.executable, str(_PROJECT_ROOT / "mount_cards.py"), "--knowledge", "knowledge/hnu_campus"],
-        check=True, capture_output=True,
-    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        slot_b = tmpdir / "slot_b"
+        knowledge_src = _PROJECT_ROOT / "templates" / "knowledge_card_template"
+        shutil.copytree(knowledge_src, slot_b / "knowledge_template")
 
-    from zhixia.core.card_base import HostContext, KnowledgeHub, PersonaHolder
-    from zhixia.core.card_loader import CardLoader
-    from zhixia.agent.tool import ToolRegistry
+        from zhixia.core.card_base import HostContext, KnowledgeHub, PersonaHolder
+        from zhixia.core.card_loader import CardLoader
+        from zhixia.agent.tool import ToolRegistry
 
-    tool_registry = ToolRegistry()
-    persona_holder = PersonaHolder("基础人设")
-    knowledge_hub = KnowledgeHub()
-    host = HostContext(
-        tool_registry=tool_registry,
-        persona_holder=persona_holder,
-        knowledge_hub=knowledge_hub,
-    )
+        tool_registry = ToolRegistry()
+        persona_holder = PersonaHolder("基础人设")
+        knowledge_hub = KnowledgeHub()
+        host = HostContext(
+            tool_registry=tool_registry,
+            persona_holder=persona_holder,
+            knowledge_hub=knowledge_hub,
+        )
 
-    slots = {
-        "knowledge": (_PROJECT_ROOT / "cards" / "slot_b", "knowledge"),
-    }
-    loader = CardLoader(slots, host)
-    loader.scan_and_sync()
+        slots = {
+            "slot_b": (slot_b, None),
+        }
+        loader = CardLoader(slots, host)
+        loader.scan_and_sync()
 
-    # 检索测试
-    results = knowledge_hub.retrieve("岳麓书院历史", top_k=2)
-    _assert("知识检索有结果", len(results) > 0)
-    _assert("结果包含书院相关内容", any("书院" in r or "岳麓" in r for r in results))
+        # 检索测试（模板文档内容）
+        results = knowledge_hub.retrieve("Markdown 格式", top_k=2)
+        _assert("知识检索有结果", len(results.chunks) > 0)
+        _assert("结果包含 Markdown", any("Markdown" in r for r in results.chunks))
 
-    results2 = knowledge_hub.retrieve("食堂", top_k=2)
-    _assert("生活相关内容可检索", len(results2) > 0)
+        results2 = knowledge_hub.retrieve("最佳实践", top_k=2)
+        _assert("生活相关内容可检索", len(results2.chunks) > 0)
 
-    # 拔卡
-    loader.force_unmount_all()
-    _assert("拔卡后知识已清除", len(host.knowledge_hub._retrievers) == 0)
+        # 验证来源信息
+        _assert("检索结果带有来源", len(results.sources) > 0)
+        _assert("来源为知识卡名称", "knowledge_template" in results.sources)
 
-    # 清理
-    subprocess.run(
-        [sys.executable, str(_PROJECT_ROOT / "mount_cards.py"), "--eject"],
-        check=True, capture_output=True,
-    )
+        # 拔卡
+        loader.force_unmount_all()
+        _assert("拔卡后知识已清除", len(host.knowledge_hub._retrievers) == 0)
 
 
 if __name__ == "__main__":

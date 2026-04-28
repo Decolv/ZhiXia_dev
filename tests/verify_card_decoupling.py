@@ -1,10 +1,10 @@
 """验证卡片与主机深度解耦
 
 测试步骤：
-1. 将 skills/hnu_freshman 复制到 cards/slot_a/
-2. 临时隐藏 skills/hnu_freshman（模拟独立部署）
+1. 将 templates/skill_card_template 复制到 cards/slot_a/
+2. 临时隐藏 templates/skill_card_template（模拟独立部署）
 3. 使用 CardLoader 从 cards/slot_a/ 加载卡片
-4. 验证工具模块的 __file__ 指向 cards/slot_a/ 而非 skills/
+4. 验证工具模块的 __file__ 指向 cards/slot_a/ 而非 templates/
 5. 恢复备份
 """
 
@@ -21,8 +21,8 @@ from zhixia.agent.tool import ToolRegistry
 
 
 def main():
-    skill_source = PROJECT_ROOT / "skills" / "hnu_freshman"
-    skill_backup = PROJECT_ROOT / "skills" / "hnu_freshman_backup"
+    skill_source = PROJECT_ROOT / "templates" / "skill_card_template"
+    skill_backup = PROJECT_ROOT / "templates" / "skill_card_template_backup"
     slot_a = PROJECT_ROOT / "cards" / "slot_a"
     slot_b = PROJECT_ROOT / "cards" / "slot_b"
 
@@ -55,12 +55,11 @@ def main():
         tool_registry=ToolRegistry(),
         persona_holder=PersonaHolder("你是助手"),
         knowledge_hub=KnowledgeHub(),
-        card_root=Path(),
     )
 
     slots = {
-        "skill": (slot_a, "skill"),
-        "knowledge": (slot_b, "knowledge"),
+        "slot_a": (slot_a, None),
+        "slot_b": (slot_b, None),
     }
     loader = CardLoader(slots, host)
 
@@ -86,7 +85,9 @@ def main():
         # 检查第一个工具的模块来源
         if tools:
             tool_cls = tools[0].__class__
-            tool_module_file = getattr(sys.modules.get(tool_cls.__module__, None), "__file__", None)
+            tool_module_file = getattr(
+                sys.modules.get(tool_cls.__module__, None), "__file__", None
+            )
             if tool_module_file:
                 tool_module_path = Path(tool_module_file).resolve()
                 slot_a_resolved = slot_a.resolve()
@@ -95,7 +96,7 @@ def main():
                     print(f"[PASS] 验证通过: 工具模块来自 cards/slot_a/")
                     print(f"    {tool_module_path}")
                 else:
-                    print(f"[FAIL] 验证失败: 工具模块仍来自 skills/ 或其他路径")
+                    print(f"[FAIL] 验证失败: 工具模块仍来自 templates/ 或其他路径")
                     print(f"    实际: {tool_module_path}")
                     print(f"    期望前缀: {slot_a_resolved}")
                     return False
@@ -114,6 +115,7 @@ def main():
     except Exception as exc:
         print(f"[ERROR] 验证异常: {exc}")
         import traceback
+
         traceback.print_exc()
         return False
 

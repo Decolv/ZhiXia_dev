@@ -154,7 +154,7 @@ class HostOrchestrator:
         tts_engine: TTSEngine,
         audio_player: AudioPlayer,
         display: Optional[DisplayOutput] = None,
-        slot_paths: Optional[Dict[str, Tuple[Path, str]]] = None,
+        slot_paths: Optional[Dict[str, Tuple[Path, Optional[str]]]] = None,
         enable_live2d_eyes: bool = True,
     ) -> None:
         self.config = config
@@ -196,11 +196,15 @@ class HostOrchestrator:
         )
 
         # 初始化卡片加载器
+        # 默认提供 4 个通用槽位，支持任意组合：
+        # 例如 1 张 Skill 卡 + 3 张 Knowledge 卡，或 2+2 等
         if slot_paths is None:
             project_root = config.project_root
             slot_paths = {
-                "skill": (project_root / "cards" / "slot_a", "skill"),
-                "knowledge": (project_root / "cards" / "slot_b", "knowledge"),
+                "slot_a": (project_root / "cards" / "slot_a", None),
+                "slot_b": (project_root / "cards" / "slot_b", None),
+                "slot_c": (project_root / "cards" / "slot_c", None),
+                "slot_d": (project_root / "cards" / "slot_d", None),
             }
         self.card_loader = CardLoader(slot_paths, self.host_context)
 
@@ -405,15 +409,8 @@ class HostOrchestrator:
 
     def _run_agent(self, agent: AgentExecutor, user_text: str) -> str:
         """Agent 模式执行。"""
-        # 构建 system prompt
+        # 构建 system prompt（包含基础人设 + 所有 Skill 卡叠加的人设）
         system_prompt = self.host_context.persona_holder.current_persona
-        
-        # 注入用户画像
-        user_profile = self.host_context.user_profile
-        if user_profile:
-            profile_text = user_profile.to_prompt_text()
-            if profile_text:
-                system_prompt += f"\n\n{profile_text}"
 
         # 使用卡片自定义 system prompt（如果有）
         agent_config = self.host_context.agent_configurator.get_config()
@@ -422,13 +419,16 @@ class HostOrchestrator:
 
         messages = [LLMMessage(role="system", content=system_prompt)]
 
-        # 知识检索
-        knowledge_chunks = self.host_context.knowledge_hub.retrieve(user_text, top_k=3)
-        if knowledge_chunks:
-            context_block = "\n".join(knowledge_chunks)
+        # 知识检索（支持多张知识卡并集，结果带来源）
+        knowledge_ctx = self.host_context.knowledge_hub.retrieve(user_text, top_k=3)
+        if knowledge_ctx.chunks:
+            chunks_with_source = []
+            for chunk, source in zip(knowledge_ctx.chunks, knowledge_ctx.sources):
+                chunks_with_source.append(f"[{source}] {chunk}")
+            context_block = "\n".join(chunks_with_source)
             messages.append(LLMMessage(
                 role="system",
-                content=f"参考信息:\n{context_block}\n请基于以上参考信息回答。",
+                content=f"参考信息（来自知识库）:\n{context_block}\n请基于以上参考信息回答。",
             ))
 
         # 对话记忆
@@ -459,23 +459,19 @@ class HostOrchestrator:
     def _run_direct_llm(self, user_text: str) -> str:
         """直接 LLM 模式（无卡 / 无工具时）。"""
         system_prompt = self.host_context.persona_holder.current_persona
-        
-        # 注入用户画像
-        user_profile = self.host_context.user_profile
-        if user_profile:
-            profile_text = user_profile.to_prompt_text()
-            if profile_text:
-                system_prompt += f"\n\n{profile_text}"
 
         messages = [LLMMessage(role="system", content=system_prompt)]
 
-        # 知识检索
-        knowledge_chunks = self.host_context.knowledge_hub.retrieve(user_text, top_k=3)
-        if knowledge_chunks:
-            context_block = "\n".join(knowledge_chunks)
+        # 知识检索（支持多张知识卡并集，结果带来源）
+        knowledge_ctx = self.host_context.knowledge_hub.retrieve(user_text, top_k=3)
+        if knowledge_ctx.chunks:
+            chunks_with_source = []
+            for chunk, source in zip(knowledge_ctx.chunks, knowledge_ctx.sources):
+                chunks_with_source.append(f"[{source}] {chunk}")
+            context_block = "\n".join(chunks_with_source)
             messages.append(LLMMessage(
                 role="system",
-                content=f"参考信息:\n{context_block}\n请基于以上参考信息回答。",
+                content=f"参考信息（来自知识库）:\n{context_block}\n请基于以上参考信息回答。",
             ))
 
         if self.config.llm.memory_enabled:

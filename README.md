@@ -107,23 +107,23 @@ zhixia/
 ### 插卡式架构
 
 ```
-skills/                    # 技能卡
-└── hnu_freshman/          # 湖南大学新生助手
+skills/                    # 技能卡源码（开发时）
+└── english_tutor_skill/   # 英语考试辅导助手（示例）
     ├── card.py                # 技能卡入口
     ├── tools/                 # 工具集
-    │   ├── campus_navigate.py     # 校园导航（LLM生成）
-    │   ├── life_guide.py          # 生活指南（LLM生成）
-    │   └── major_query.py         # 专业查询（LLM生成）
-    ├── assets/              # 图片资源
-    │   ├── maps/                # 地图图片
-    │   └── photos/              # 实景照片
+    │   ├── exam_planner.py        # 考试规划
+    │   ├── listening_assistant.py # 听力训练
+    │   └── writing_assistant.py   # 作文辅导
     ├── persona.json         # 人设配置
     └── manifest.json        # 卡片清单
 
-knowledge/                 # 知识卡
-└── hnu_campus/            # 湖南大学校园知识
+knowledge/                 # 知识卡源码（开发时）
+└── english_tutor_knowledge/  # 英语考试知识库（示例）
     ├── card.py                  # 知识卡入口
     └── docs/                    # 知识文档
+        ├── listening/
+        ├── vocabulary/
+        └── writing/
 ```
 
 ## 核心功能

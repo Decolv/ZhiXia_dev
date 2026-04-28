@@ -7,13 +7,14 @@
 4. 调用 on_mount() / on_unmount() 生命周期
 5. 拔卡后彻底清除痕迹（sys.modules、工具注册表、知识库、人设）
 
-槽位设计：
-    cards/slot_a/  — 技能卡槽位（SkillCard）
-    cards/slot_b/  — 知识卡槽位（KnowledgeCard）
+槽位设计（通用化）：
+    cards/slot_a/ ~ slot_d/  — 通用槽位，不强制限定类型
+    可通过 accepted_type 参数限制槽位接受的卡片类型（None=接受任何）
 
 插卡操作（对用户而言）：
-    cp -r skills/hnu_freshman cards/slot_a/
-    cp -r knowledge/hnu_campus cards/slot_b/
+    cp -r skills/my_skill cards/slot_a/
+    cp -r knowledge/kb1 cards/slot_b/
+    cp -r knowledge/kb2 cards/slot_c/
 
 拔卡操作：
     rm -rf cards/slot_a/*
@@ -31,7 +32,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from zhixia.core.card_base import CardBase, CardManifest, HostContext
-from zhixia.core.user_profile import UserProfile
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +46,9 @@ class SlotWatcher:
     通过对比目录签名（manifest.json 的 mtime + size）检测变化。
     """
 
-    def __init__(self, slot_path: Path, slot_type: str) -> None:
+    def __init__(self, slot_path: Path, accepted_type: Optional[str] = None) -> None:
         self.slot_path = slot_path
-        self.slot_type = slot_type
+        self.accepted_type = accepted_type  # None 表示接受任何类型
         self._last_signature: Optional[str] = None
         self._current_card: Optional[CardBase] = None
 
@@ -113,14 +113,15 @@ class CardLoader:
     """卡片加载器：管理所有槽位的热插拔。
 
     Args:
-        slots: 槽位配置 {"slot_id": (path, type)}
-               例如 {"skill": (Path("cards/slot_a"), "skill")}
+        slots: 槽位配置 {"slot_id": (path, accepted_type)}
+               例如 {"slot_a": (Path("cards/slot_a"), None)} 表示接受任何类型
+               {"slot_b": (Path("cards/slot_b"), "knowledge")} 表示只接受知识卡
         host_context: 主机上下文，传给卡片的 on_mount/on_unmount
     """
 
     def __init__(
         self,
-        slots: Dict[str, Tuple[Path, str]],
+        slots: Dict[str, Tuple[Path, Optional[str]]],
         host_context: HostContext,
     ) -> None:
         self.host = host_context
@@ -128,10 +129,11 @@ class CardLoader:
         self.mounted_cards: Dict[str, CardBase] = {}
         self._module_prefix = "_zhixia_card"
 
-        for slot_id, (path, slot_type) in slots.items():
+        for slot_id, (path, accepted_type) in slots.items():
             path.mkdir(parents=True, exist_ok=True)
-            self.watchers[slot_id] = SlotWatcher(path, slot_type)
-            logger.info("槽位就绪 [%s]: %s (类型: %s)", slot_id, path, slot_type)
+            self.watchers[slot_id] = SlotWatcher(path, accepted_type)
+            type_desc = accepted_type or "any"
+            logger.info("槽位就绪 [%s]: %s (接受类型: %s)", slot_id, path, type_desc)
 
     # -- 公共接口 --
 
@@ -202,11 +204,11 @@ class CardLoader:
             logger.error("[%s] manifest 加载失败", slot_id)
             return None
 
-        slot_type = self.watchers[slot_id].slot_type
-        if slot_type != manifest.type:
+        accepted_type = self.watchers[slot_id].accepted_type
+        if accepted_type is not None and accepted_type != manifest.type:
             logger.error(
                 "[%s] 卡片类型不匹配: 槽位要求 '%s'，但卡片是 '%s'",
-                slot_id, slot_type, manifest.type,
+                slot_id, accepted_type, manifest.type,
             )
             return None
 
@@ -214,17 +216,10 @@ class CardLoader:
         if card_instance is None:
             return None
 
-        old_card_root = self.host.card_root
-        self.host.card_root = card_root
-
-        self.host.user_profile = UserProfile(card_root=card_root)
-        logger.info("[%s] 用户画像已加载", slot_id)
-
         try:
             card_instance.on_mount(self.host)
         except Exception as exc:
             logger.exception("[%s] on_mount 失败: %s", slot_id, exc)
-            self.host.card_root = old_card_root
             self._cleanup_modules(card_root)
             return None
 
@@ -239,11 +234,6 @@ class CardLoader:
     def _unmount_card(self, slot_id: str, card: CardBase) -> None:
         """卸载单张卡片。"""
         logger.info("开始卸载卡片 [%s]: %s", slot_id, card.name)
-
-        if self.host.user_profile:
-            self.host.user_profile.save()
-            logger.info("[%s] 用户画像已保存", slot_id)
-            self.host.user_profile = None
 
         try:
             card.on_unmount(self.host)
@@ -264,10 +254,6 @@ class CardLoader:
         watcher = self.watchers.get(slot_id)
         if watcher:
             watcher.clear_current_card()
-
-        old_card_root = self.host.card_root
-        if old_card_root == card.card_root:
-            self.host.card_root = Path()
 
         logger.info("[%s] 卡片卸载完成: %s", slot_id, card.name)
 
@@ -322,13 +308,25 @@ class CardLoader:
                 logger.debug("[%s] 已从 sys.path 移除卡片根目录", slot_id)
 
     def _find_card_class(self, module) -> Optional[type]:
-        """在模块中查找 CardBase 的子类。"""
+        """在模块中查找 CardBase 的具体子类。
+
+        过滤掉抽象基类（如 SkillCard / KnowledgeCard），
+        确保返回的是可以实例化的具体卡片类。
+        """
         import inspect
 
+        candidates = []
         for name, obj in inspect.getmembers(module, inspect.isclass):
             if issubclass(obj, CardBase) and obj is not CardBase:
-                return obj
-        return None
+                candidates.append(obj)
+
+        # 优先返回非抽象类（没有 __abstractmethods__）
+        for cls in candidates:
+            if not getattr(cls, "__abstractmethods__", None):
+                return cls
+
+        # 如果没有非抽象类，返回第一个（保持向后兼容）
+        return candidates[0] if candidates else None
 
     # -- 痕迹清除 --
 
