@@ -16,7 +16,7 @@ import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple, Union
 
 from zhixia.agent.tool import ToolRegistry
 from zhixia.core.user_profile import UserProfile
@@ -153,6 +153,17 @@ class CardManifest:
             "dependencies": [],
             "min_host_version": "0.2.0"
         }
+
+    知识卡示例（带内容类型声明）:
+        {
+            "name": "english_tutor_knowledge",
+            "display_name": "英语考试知识库",
+            "version": "1.0.0",
+            "type": "knowledge",
+            "content_types": ["listening", "sentences", "writing", "vocabulary"],
+            "supported_exams": ["cet4", "cet6", "ielts"],
+            ...
+        }
     """
 
     name: str
@@ -164,6 +175,9 @@ class CardManifest:
     entrypoint: str = "card.py"  # 相对卡片根目录的入口文件
     dependencies: List[str] = field(default_factory=list)
     min_host_version: str = "0.1.0"
+    # 知识卡特有字段
+    content_types: List[str] = field(default_factory=list)  # 内容类型
+    supported_exams: List[str] = field(default_factory=list)  # 支持的考试类型
 
     @classmethod
     def load(cls, card_root: Path) -> Optional[CardManifest]:
@@ -501,3 +515,164 @@ class KnowledgeCard(CardBase, ABC):
         if not docs_dir.exists() or not docs_dir.is_dir():
             return []
         return sorted([p for p in docs_dir.iterdir() if p.is_file()])
+
+
+# ---------------------------------------------------------------------------
+# Knowledge Content Data Models — 知识内容数据模型
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ListeningMaterial:
+    """听力材料数据模型。"""
+    id: str
+    title: str
+    exam_type: str  # cet4/cet6/ielts/toefl
+    original_text: str  # 原文
+    translation: str  # 中文翻译
+    difficulty: str  # beginner/intermediate/advanced
+    topic: str = ""  # 话题标签
+    material_type: str = ""  # conversation/news/lecture
+
+
+@dataclass
+class Sentence:
+    """长难句数据模型。"""
+    id: str
+    original: str  # 原句
+    translation: str  # 中文翻译
+    grammar_analysis: str  # 语法分析
+    vocabulary: List[Dict[str, str]] = field(default_factory=list)  # 重点词汇
+    difficulty: str = "intermediate"  # beginner/intermediate/advanced
+    source: str = ""  # 来源
+
+
+@dataclass
+class WritingExample:
+    """作文范文数据模型。"""
+    id: str
+    exam_type: str  # cet4/cet6/ielts
+    essay_type: str  # argumentation/narration/exposition
+    title: str
+    content: str  # 范文内容
+    analysis: str = ""  # 点评分析
+
+
+@dataclass
+class VocabularyItem:
+    """词汇条目数据模型。"""
+    id: str
+    word: str
+    phonetic: str
+    pos: str  # 词性
+    meaning: str  # 释义
+    example: str = ""  # 例句
+    translation: str = ""  # 例句翻译
+    memory_tip: str = ""  # 记忆法
+
+
+# ---------------------------------------------------------------------------
+# KnowledgeProvider — 知识提供者接口
+# ---------------------------------------------------------------------------
+
+class KnowledgeProvider(Protocol):
+    """知识提供者接口。
+
+    知识卡实现此接口，向技能卡提供标准化的知识内容访问。
+    实现解耦：技能卡通过此接口获取内容，无需关心具体知识卡实现。
+    """
+
+    def get_listening_materials(
+        self,
+        exam_type: Optional[str] = None,
+        difficulty: Optional[str] = None
+    ) -> List[ListeningMaterial]:
+        """获取听力材料。
+
+        Args:
+            exam_type: 考试类型过滤 (cet4/cet6/ielts/toefl)
+            difficulty: 难度过滤 (beginner/intermediate/advanced)
+
+        Returns:
+            听力材料列表
+        """
+        ...
+
+    def get_sentences(
+        self,
+        difficulty: Optional[str] = None,
+        source: Optional[str] = None
+    ) -> List[Sentence]:
+        """获取长难句。
+
+        Args:
+            difficulty: 难度过滤 (beginner/intermediate/advanced)
+            source: 来源过滤 (economist/nytimes等)
+
+        Returns:
+            长难句列表
+        """
+        ...
+
+    def get_writing_examples(
+        self,
+        exam_type: Optional[str] = None,
+        essay_type: Optional[str] = None
+    ) -> List[WritingExample]:
+        """获取作文范文。
+
+        Args:
+            exam_type: 考试类型过滤 (cet4/cet6/ielts)
+            essay_type: 作文类型过滤 (argumentation/narration/exposition)
+
+        Returns:
+            作文范文列表
+        """
+        ...
+
+    def get_vocabulary(
+        self,
+        exam_type: Optional[str] = None,
+        category: Optional[str] = None
+    ) -> List[VocabularyItem]:
+        """获取词汇。
+
+        Args:
+            exam_type: 考试类型过滤 (cet4/cet6/ielts)
+            category: 词汇分类 (core/academic/collocations)
+
+        Returns:
+            词汇列表
+        """
+        ...
+
+
+# ---------------------------------------------------------------------------
+# ContentAwareKnowledgeCard — 内容感知知识卡基类
+# ---------------------------------------------------------------------------
+
+class ContentAwareKnowledgeCard(KnowledgeCard, ABC):
+    """内容感知知识卡基类。
+
+    实现 KnowledgeProvider 接口，提供标准化的知识内容访问。
+    技能卡可通过此接口获取内容，实现技能卡与知识卡的解耦。
+    """
+
+    @property
+    @abstractmethod
+    def content_types(self) -> List[str]:
+        """返回知识卡提供的内容类型列表。
+
+        Returns:
+            如 ["listening", "sentences", "writing", "vocabulary"]
+        """
+        ...
+
+    @property
+    @abstractmethod
+    def supported_exams(self) -> List[str]:
+        """返回支持的考试类型列表。
+
+        Returns:
+            如 ["cet4", "cet6", "ielts"]
+        """
+        ...

@@ -18,16 +18,14 @@ class ListeningAssistantTool(Tool):
     - check: 接收用户中文翻译，对照正确翻译给出反馈
     """
 
-    # 知识卡基础路径
-    KNOWLEDGE_BASE_PATH = "d:\\Code\\ZhiXia_dev\\skills\\english_tutor_knowledge\\docs\\listening"
-
-    def __init__(self, llm_engine=None):
+    def __init__(self, llm_engine=None, knowledge_provider: Optional["KnowledgeProvider"] = None):
         super().__init__(
             name="listening_assistant",
             description="听力辅助器工具：获取听力材料(get_material)、播放听力(play)、理解测试(check)。参数：action(必需), exam_type, difficulty, material_id, user_translation",
             func=self._execute,
         )
         self._llm_engine = llm_engine
+        self._knowledge_provider = knowledge_provider
         self._materials_cache: Dict[str, Dict] = {}
 
     def _execute(
@@ -63,28 +61,12 @@ class ListeningAssistantTool(Tool):
         self, exam_type: Optional[str], difficulty: Optional[str]
     ) -> str:
         """获取可用的听力材料列表。"""
-        materials = []
+        # 无知识卡时的降级处理
+        if self._knowledge_provider is None:
+            return "【提示】知识卡未挂载，无法获取听力材料"
 
-        # 确定要扫描的考试类型目录
-        exam_types = [exam_type] if exam_type else ["cet4", "cet6", "ielts"]
-
-        for etype in exam_types:
-            exam_path = os.path.join(self.KNOWLEDGE_BASE_PATH, etype)
-            if not os.path.exists(exam_path):
-                continue
-
-            for filename in os.listdir(exam_path):
-                if filename.endswith(".md"):
-                    file_path = os.path.join(exam_path, filename)
-                    material_info = self._parse_material_file(file_path, etype, filename)
-
-                    # 根据难度过滤
-                    if difficulty and material_info.get("difficulty") != difficulty:
-                        continue
-
-                    materials.append(material_info)
-                    # 缓存材料内容
-                    self._materials_cache[material_info["id"]] = material_info
+        # 通过知识提供者获取材料
+        materials = self._knowledge_provider.get_listening_materials(exam_type, difficulty)
 
         if not materials:
             filter_info = []
@@ -94,6 +76,10 @@ class ListeningAssistantTool(Tool):
                 filter_info.append(f"难度: {difficulty}")
             filters = "，".join(filter_info) if filter_info else "无"
             return f"未找到符合条件的听力材料（筛选条件：{filters}）"
+
+        # 缓存材料内容
+        for material in materials:
+            self._materials_cache[material["id"]] = material
 
         # 格式化输出
         lines = ["📚 可用听力材料列表", "=" * 40]

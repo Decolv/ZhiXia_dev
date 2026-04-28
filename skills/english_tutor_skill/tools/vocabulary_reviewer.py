@@ -5,6 +5,9 @@
 2. 滚动复习：按记忆曲线安排复习
 3. 定期检测：测试用户词汇掌握情况
 4. 进度汇总：统计学习进度并给出建议
+
+依赖：
+- 通过 KnowledgeProvider 接口获取词汇内容，实现与知识卡的解耦
 """
 
 import json
@@ -12,8 +15,11 @@ import os
 import random
 import re
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
+from typing import TYPE_CHECKING, Dict, List, Optional, Any
 from zhixia.agent.tool import Tool
+
+if TYPE_CHECKING:
+    from zhixia.core.card_base import KnowledgeProvider, VocabularyItem
 
 
 class VocabularyReviewerTool(Tool):
@@ -24,19 +30,24 @@ class VocabularyReviewerTool(Tool):
     - review: 按记忆曲线返回今日复习单词列表
     - test: 生成测试题目或评分
     - progress: 统计学习进度并给出建议
+
+    依赖：
+    - 通过 KnowledgeProvider 接口获取词汇内容，实现与知识卡的解耦
+    - 支持动态切换不同考试类型的词汇库
     """
 
     # 艾宾浩斯遗忘曲线复习间隔（天数）
     REVIEW_INTERVALS = [1, 2, 4, 7, 15, 30]
 
-    # 词汇库路径映射
-    VOCABULARY_PATHS = {
-        "cet4": "skills/english_tutor_knowledge/docs/vocabulary/cet4_core.md",
-        "cet6": "skills/english_tutor_knowledge/docs/vocabulary/cet6_core.md",
-        "ielts": "skills/english_tutor_knowledge/docs/vocabulary/ielts_academic.md",
-    }
+    # 支持的考试类型
+    SUPPORTED_EXAMS = ["cet4", "cet6", "ielts"]
 
-    def __init__(self, llm_engine=None, project_root: str = None):
+    def __init__(
+        self,
+        llm_engine=None,
+        project_root: str = None,
+        knowledge_provider: Optional["KnowledgeProvider"] = None
+    ):
         super().__init__(
             name="vocabulary_reviewer",
             description="词汇复习器工具：制定词汇记忆计划、滚动复习、定期检测、进度汇总。参数：action(create_plan/review/test/progress)、exam_type(cet4/cet6/ielts)、daily_count(每日学习量)、word_id(单词ID)、test_results(测试结果)",
@@ -44,8 +55,17 @@ class VocabularyReviewerTool(Tool):
         )
         self._llm_engine = llm_engine
         self._project_root = project_root or self._find_project_root()
+        self._knowledge_provider = knowledge_provider
         self._user_data_dir = os.path.join(self._project_root, "data", "vocabulary_reviewer")
         os.makedirs(self._user_data_dir, exist_ok=True)
+
+    def set_knowledge_provider(self, knowledge_provider: Optional["KnowledgeProvider"]) -> None:
+        """动态设置或切换知识提供者。
+
+        Args:
+            knowledge_provider: 知识提供者实例，用于获取词汇内容
+        """
+        self._knowledge_provider = knowledge_provider
 
     def _find_project_root(self) -> str:
         """查找项目根目录"""
@@ -90,40 +110,42 @@ class VocabularyReviewerTool(Tool):
             return f"【错误】未知的操作类型：{action}\n\n支持的操作：create_plan, review, test, progress"
 
     def _load_vocabulary(self, exam_type: str) -> List[Dict[str, str]]:
-        """加载词汇库"""
-        vocab_file = self.VOCABULARY_PATHS.get(exam_type.lower())
-        if not vocab_file:
+        """加载词汇库。
+
+        优先通过 KnowledgeProvider 接口获取词汇内容，
+        如果未提供 knowledge_provider，则返回空列表。
+
+        Args:
+            exam_type: 考试类型 (cet4/cet6/ielts)
+
+        Returns:
+            词汇列表，每个词汇为字典格式
+        """
+        if not self._knowledge_provider:
             return []
 
-        file_path = os.path.join(self._project_root, vocab_file)
-        if not os.path.exists(file_path):
-            return []
-
-        words = []
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
+            vocab_items: List["VocabularyItem"] = self._knowledge_provider.get_vocabulary(
+                exam_type=exam_type
+            )
 
-            # 解析 Markdown 格式的词汇列表
-            pattern = r"###\s+(\w+)\n- 单词:\s*(.+?)\n- 音标:\s*(.+?)\n- 词性:\s*(.+?)\n- 释义:\s*(.+?)\n- 例句:\s*(.+?)\n- 翻译:\s*(.+?)\n- 记忆法:\s*(.+?)(?=\n###|\Z)"
-            matches = re.findall(pattern, content, re.DOTALL)
-
-            for match in matches:
-                word_id, word, phonetic, pos, meaning, example, translation, memory = match
+            # 将 VocabularyItem 转换为字典格式
+            words = []
+            for item in vocab_items:
                 words.append({
-                    "id": word_id.strip(),
-                    "word": word.strip(),
-                    "phonetic": phonetic.strip(),
-                    "pos": pos.strip(),
-                    "meaning": meaning.strip(),
-                    "example": example.strip(),
-                    "translation": translation.strip(),
-                    "memory": memory.strip(),
+                    "id": item.id,
+                    "word": item.word,
+                    "phonetic": item.phonetic,
+                    "pos": item.pos,
+                    "meaning": item.meaning,
+                    "example": item.example,
+                    "translation": item.translation,
+                    "memory": item.memory_tip,
                 })
+            return words
         except Exception as e:
-            print(f"加载词汇库失败: {e}")
-
-        return words
+            print(f"通过 KnowledgeProvider 加载词汇库失败: {e}")
+            return []
 
     def _get_user_data_path(self, exam_type: str) -> str:
         """获取用户数据文件路径"""
@@ -172,13 +194,26 @@ class VocabularyReviewerTool(Tool):
             return "【错误】请指定考试类型（cet4/cet6/ielts）"
 
         exam_type = exam_type.lower()
-        if exam_type not in self.VOCABULARY_PATHS:
-            return f"【错误】不支持的考试类型：{exam_type}\n\n支持的类型：cet4, cet6, ielts"
+        if exam_type not in self.SUPPORTED_EXAMS:
+            return f"【错误】不支持的考试类型：{exam_type}\n\n支持的类型：{', '.join(self.SUPPORTED_EXAMS)}"
+
+        # 检查知识提供者是否可用
+        if not self._knowledge_provider:
+            return (
+                f"【错误】词汇知识卡未加载\n\n"
+                f"词汇复习器需要英语考试知识卡提供词汇内容。\n"
+                f"请先加载 english_tutor_knowledge 知识卡。"
+            )
 
         # 加载词汇库
         vocabulary = self._load_vocabulary(exam_type)
         if not vocabulary:
-            return f"【错误】无法加载 {exam_type} 词汇库"
+            return (
+                f"【错误】无法加载 {exam_type} 词汇库\n\n"
+                f"可能原因：\n"
+                f"1. 知识卡中未包含 {exam_type} 的词汇内容\n"
+                f"2. KnowledgeProvider 接口返回空数据"
+            )
 
         total_words = len(vocabulary)
         days_needed = (total_words + daily_count - 1) // daily_count

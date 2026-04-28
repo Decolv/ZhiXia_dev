@@ -4,10 +4,10 @@
   "description": "英语考试知识卡，包含听力、写作、词汇和长难句等学习资料",
   "version": "1.0.0",
   "author": "ZhiXia",
-  "card_type": "knowledge",
-  "entry_point": "card.py",
-  "class_name": "EnglishTutorKnowledge",
+  "type": "knowledge",
+  "entrypoint": "card.py",
   "dependencies": [],
-  "tags": ["english", "exam", "cet4", "cet6", "ielts", "learning"],
-  "docs_dir": "docs"
+  "min_host_version": "0.1.0",
+  "content_types": ["listening", "sentences", "writing", "vocabulary"],
+  "supported_exams": ["cet4", "cet6", "ielts"]
 }

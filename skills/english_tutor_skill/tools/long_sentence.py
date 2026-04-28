@@ -1,9 +1,27 @@
 """长难句助力器工具 - 帮助用户学习和理解长难句"""
 
-import os
-import re
 from typing import Optional, Dict, List, Any
 from zhixia.agent.tool import Tool
+
+
+class KnowledgeProvider:
+    """知识提供者接口定义"""
+
+    def get_sentences(
+        self,
+        difficulty: Optional[str] = None,
+        source: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """获取句子列表
+
+        Args:
+            difficulty: 难度级别
+            source: 来源
+
+        Returns:
+            句子列表
+        """
+        raise NotImplementedError
 
 
 class LongSentenceTool(Tool):
@@ -14,9 +32,6 @@ class LongSentenceTool(Tool):
     - explain: 详细讲解特定语法点
     - analyze: 完整分析句子结构
     """
-
-    # 知识卡基础路径
-    KNOWLEDGE_BASE_PATH = "d:\\Code\\ZhiXia_dev\\skills\\english_tutor_knowledge\\docs\\sentences"
 
     # 难度级别映射
     DIFFICULTY_LEVELS = {
@@ -31,7 +46,11 @@ class LongSentenceTool(Tool):
         "nytimes": "纽约时报"
     }
 
-    def __init__(self, llm_engine=None):
+    def __init__(
+        self,
+        llm_engine=None,
+        knowledge_provider: Optional[KnowledgeProvider] = None
+    ):
         super().__init__(
             name="long_sentence",
             description="""长难句助力器工具：获取、解析和讲解英语长难句。
@@ -54,6 +73,7 @@ class LongSentenceTool(Tool):
             func=self._execute,
         )
         self._llm_engine = llm_engine
+        self._knowledge_provider = knowledge_provider
         self._sentences_cache: Dict[str, List[Dict[str, Any]]] = {}
 
     def _execute(
@@ -87,93 +107,31 @@ class LongSentenceTool(Tool):
         else:
             return f"【错误】不支持的操作类型：{action}。请使用 get_sentence、explain 或 analyze。"
 
-    def _load_sentences(self, file_path: str) -> List[Dict[str, Any]]:
-        """从markdown文件加载句子数据。
-
-        Args:
-            file_path: 文件路径
-
-        Returns:
-            句子列表，每个句子包含原句、翻译、语法分析和词汇
-        """
-        if file_path in self._sentences_cache:
-            return self._sentences_cache[file_path]
-
-        sentences = []
-        if not os.path.exists(file_path):
-            return sentences
-
-        with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-
-        # 解析句子块 (## 句子X 开头的部分)
-        sentence_blocks = re.split(r'## 句子\d+', content)
-
-        for i, block in enumerate(sentence_blocks[1:], 1):  # 跳过第一个空块
-            sentence_data = self._parse_sentence_block(block, i)
-            if sentence_data:
-                sentences.append(sentence_data)
-
-        self._sentences_cache[file_path] = sentences
-        return sentences
-
-    def _parse_sentence_block(self, block: str, sentence_num: int) -> Optional[Dict[str, Any]]:
-        """解析单个句子块的内容。
-
-        Args:
-            block: 句子块文本
-            sentence_num: 句子编号
-
-        Returns:
-            解析后的句子数据字典
-        """
-        sentence_data = {
-            "id": f"sentence{sentence_num}",
-            "original": "",
-            "translation": "",
-            "grammar_analysis": "",
-            "vocabulary": []
-        }
-
-        # 提取原句
-        original_match = re.search(r'### 原句\s*\n([^\n]+)', block)
-        if original_match:
-            sentence_data["original"] = original_match.group(1).strip()
-
-        # 提取翻译
-        translation_match = re.search(r'### 翻译\s*\n([^#]+)', block)
-        if translation_match:
-            sentence_data["translation"] = translation_match.group(1).strip()
-
-        # 提取语法分析
-        grammar_match = re.search(r'### 语法分析\s*\n([^#]+)', block)
-        if grammar_match:
-            sentence_data["grammar_analysis"] = grammar_match.group(1).strip()
-
-        # 提取词汇
-        vocab_section = re.search(r'### 重点词汇\s*\n(.+?)(?=##|$)', block, re.DOTALL)
-        if vocab_section:
-            vocab_text = vocab_section.group(1)
-            vocab_items = re.findall(r'-\s*([^:]+):\s*(.+)', vocab_text)
-            sentence_data["vocabulary"] = [{"word": w.strip(), "meaning": m.strip()} for w, m in vocab_items]
-
-        return sentence_data if sentence_data["original"] else None
-
-    def _get_file_path(self, difficulty: Optional[str], source: Optional[str]) -> Optional[str]:
-        """根据参数确定要加载的文件路径。
+    def _get_sentences(
+        self,
+        difficulty: Optional[str] = None,
+        source: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """获取句子列表（带缓存）。
 
         Args:
             difficulty: 难度级别
             source: 来源
 
         Returns:
-            文件路径或None
+            句子列表
         """
-        if difficulty and difficulty.lower() in self.DIFFICULTY_LEVELS:
-            return os.path.join(self.KNOWLEDGE_BASE_PATH, "by_difficulty", f"{difficulty.lower()}.md")
-        elif source and source.lower() in self.SOURCES:
-            return os.path.join(self.KNOWLEDGE_BASE_PATH, "by_source", f"{source.lower()}.md")
-        return None
+        cache_key = f"{difficulty or 'all'}_{source or 'all'}"
+
+        if cache_key in self._sentences_cache:
+            return self._sentences_cache[cache_key]
+
+        sentences = []
+        if self._knowledge_provider:
+            sentences = self._knowledge_provider.get_sentences(difficulty, source)
+
+        self._sentences_cache[cache_key] = sentences
+        return sentences
 
     def _get_sentence(
         self,
@@ -191,36 +149,81 @@ class LongSentenceTool(Tool):
         Returns:
             格式化的句子信息
         """
-        file_path = self._get_file_path(difficulty, source)
+        if not self._knowledge_provider:
+            return self._get_fallback_response()
 
-        if not file_path:
-            available_options = []
-            if not difficulty and not source:
-                available_options = ["difficulty: beginner/intermediate/advanced", "source: economist/nytimes"]
-            else:
-                available_options = ["请检查参数是否正确"]
-            return f"【错误】请指定有效的难度级别或来源。\n可用选项：{', '.join(available_options)}"
-
-        sentences = self._load_sentences(file_path)
+        sentences = self._get_sentences(difficulty, source)
 
         if not sentences:
-            return "【错误】未能加载句子数据，请检查知识库文件。"
+            return self._get_no_data_response(difficulty, source)
 
         # 如果指定了sentence_id，查找特定句子
         if sentence_id:
             target = None
             for s in sentences:
-                if s["id"] == sentence_id.lower():
+                if s.get("id") == sentence_id.lower():
                     target = s
                     break
             if target:
                 return self._format_sentence_basic(target)
             else:
-                available_ids = ", ".join([s["id"] for s in sentences])
+                available_ids = ", ".join([s.get("id", "unknown") for s in sentences])
                 return f"【错误】未找到句子 {sentence_id}。\n可用句子ID：{available_ids}"
 
         # 否则返回第一个句子
         return self._format_sentence_basic(sentences[0])
+
+    def _get_fallback_response(self) -> str:
+        """获取降级响应（无知识提供者时）。
+
+        Returns:
+            降级提示信息
+        """
+        return """【提示】长难句知识库暂不可用。
+
+可能的原因：
+  • 知识提供者未配置
+  • 知识服务暂时不可用
+
+您可以：
+  1. 稍后重试
+  2. 使用 explain 操作学习通用语法知识（无需知识库）
+  3. 直接提供句子，我可以使用AI能力进行分析
+
+示例：action=explain, grammar_point=定语从句"""
+
+    def _get_no_data_response(
+        self,
+        difficulty: Optional[str],
+        source: Optional[str]
+    ) -> str:
+        """获取无数据时的响应。
+
+        Args:
+            difficulty: 难度级别
+            source: 来源
+
+        Returns:
+            无数据提示信息
+        """
+        filters = []
+        if difficulty:
+            filters.append(f"难度: {difficulty}")
+        if source:
+            filters.append(f"来源: {source}")
+
+        filter_str = f"（{'，'.join(filters)}）" if filters else ""
+
+        return f"""【提示】未找到符合条件的长难句{filter_str}。
+
+可用选项：
+  • 难度级别：beginner(初级), intermediate(中级), advanced(高级)
+  • 来源：economist(经济学人), nytimes(纽约时报)
+
+您可以：
+  1. 更换筛选条件重试
+  2. 使用 action=explain 学习通用语法知识
+  3. 直接提供句子，我可以使用AI能力进行分析"""
 
     def _format_sentence_basic(self, sentence: Dict[str, Any]) -> str:
         """格式化基础句子信息。
@@ -234,18 +237,24 @@ class LongSentenceTool(Tool):
         result = [
             "📚 长难句学习",
             "",
-            f"【原句】{sentence['original']}",
+            f"【原句】{sentence.get('original', '')}",
             "",
-            f"【翻译】{sentence['translation']}",
+            f"【翻译】{sentence.get('translation', '')}",
             "",
             "【语法结构】",
-            sentence['grammar_analysis'],
+            sentence.get('grammar_analysis', ''),
             "",
             "【重点词汇】"
         ]
 
-        for vocab in sentence['vocabulary']:
-            result.append(f"  • {vocab['word']}: {vocab['meaning']}")
+        vocabulary = sentence.get('vocabulary', [])
+        if vocabulary:
+            for vocab in vocabulary:
+                word = vocab.get('word', '') if isinstance(vocab, dict) else str(vocab)
+                meaning = vocab.get('meaning', '') if isinstance(vocab, dict) else ''
+                result.append(f"  • {word}: {meaning}")
+        else:
+            result.append("  （无重点词汇）")
 
         result.extend([
             "",
@@ -254,7 +263,7 @@ class LongSentenceTool(Tool):
             "  2. 对照翻译，理解句子结构",
             "  3. 学习重点词汇和语法点",
             "  4. 如需详细分析，使用 action=analyze",
-            f"  5. 句子ID: {sentence['id']}，可用于后续分析"
+            f"  5. 句子ID: {sentence.get('id', 'unknown')}，可用于后续分析"
         ])
 
         return "\n".join(result)
@@ -401,6 +410,7 @@ class LongSentenceTool(Tool):
 
         # 查找匹配的语法点
         matched_point = None
+        matched_name = None
         for key, value in grammar_knowledge.items():
             if key in grammar_point or grammar_point in key:
                 matched_point = value
@@ -458,25 +468,23 @@ class LongSentenceTool(Tool):
         Returns:
             详细的句子分析报告
         """
-        file_path = self._get_file_path(difficulty, source)
+        if not self._knowledge_provider:
+            return self._get_fallback_response()
 
-        if not file_path:
-            return "【错误】请指定有效的难度级别(beginner/intermediate/advanced)或来源(economist/nytimes)。"
-
-        sentences = self._load_sentences(file_path)
+        sentences = self._get_sentences(difficulty, source)
 
         if not sentences:
-            return "【错误】未能加载句子数据，请检查知识库文件。"
+            return self._get_no_data_response(difficulty, source)
 
         # 查找目标句子
         target = None
         if sentence_id:
             for s in sentences:
-                if s["id"] == sentence_id.lower():
+                if s.get("id") == sentence_id.lower():
                     target = s
                     break
             if not target:
-                available_ids = ", ".join([s["id"] for s in sentences])
+                available_ids = ", ".join([s.get("id", "unknown") for s in sentences])
                 return f"【错误】未找到句子 {sentence_id}。\n可用句子ID：{available_ids}"
         else:
             target = sentences[0]
@@ -485,9 +493,9 @@ class LongSentenceTool(Tool):
         result = [
             "🔍 长难句深度分析",
             "",
-            f"【原句】{target['original']}",
+            f"【原句】{target.get('original', '')}",
             "",
-            f"【翻译】{target['translation']}",
+            f"【翻译】{target.get('translation', '')}",
             "",
             "=" * 50,
             "",
@@ -498,7 +506,7 @@ class LongSentenceTool(Tool):
             "  • 暂时忽略修饰成分，理解核心意思",
             "",
             "第二步：分析从句和修饰成分",
-            f"  {target['grammar_analysis']}",
+            f"  {target.get('grammar_analysis', '')}",
             "",
             "第三步：理解逻辑关系",
             "  • 确定各成分之间的逻辑联系",
@@ -509,9 +517,16 @@ class LongSentenceTool(Tool):
             "📚 重点词汇详解："
         ]
 
-        for vocab in target['vocabulary']:
-            result.append(f"  • {vocab['word']}")
-            result.append(f"    释义：{vocab['meaning']}")
+        vocabulary = target.get('vocabulary', [])
+        if vocabulary:
+            for vocab in vocabulary:
+                word = vocab.get('word', '') if isinstance(vocab, dict) else str(vocab)
+                meaning = vocab.get('meaning', '') if isinstance(vocab, dict) else ''
+                result.append(f"  • {word}")
+                result.append(f"    释义：{meaning}")
+                result.append("")
+        else:
+            result.append("  （无重点词汇）")
             result.append("")
 
         result.extend([
@@ -522,7 +537,7 @@ class LongSentenceTool(Tool):
             "  2. 模仿造句，运用所学语法",
             "  3. 定期复习，巩固记忆",
             "  4. 如需讲解特定语法点，使用 action=explain",
-            f"  5. 句子ID: {target['id']}"
+            f"  5. 句子ID: {target.get('id', 'unknown')}"
         ])
 
         # 如果有LLM引擎，添加智能分析
@@ -536,7 +551,11 @@ class LongSentenceTool(Tool):
 
         return "\n".join(result)
 
-    def get_all_sentences(self, difficulty: Optional[str] = None, source: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_all_sentences(
+        self,
+        difficulty: Optional[str] = None,
+        source: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """获取所有句子列表（用于外部调用）。
 
         Args:
@@ -546,12 +565,14 @@ class LongSentenceTool(Tool):
         Returns:
             句子列表
         """
-        file_path = self._get_file_path(difficulty, source)
-        if file_path:
-            return self._load_sentences(file_path)
-        return []
+        return self._get_sentences(difficulty, source)
 
-    def get_sentence_by_id(self, sentence_id: str, difficulty: Optional[str] = None, source: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def get_sentence_by_id(
+        self,
+        sentence_id: str,
+        difficulty: Optional[str] = None,
+        source: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """根据ID获取特定句子（用于外部调用）。
 
         Args:
@@ -564,6 +585,6 @@ class LongSentenceTool(Tool):
         """
         sentences = self.get_all_sentences(difficulty, source)
         for s in sentences:
-            if s["id"] == sentence_id.lower():
+            if s.get("id") == sentence_id.lower():
                 return s
         return None

@@ -1,9 +1,10 @@
 """作文辅导器工具 - 提供范文、思路建议、万能句推荐和作文润色"""
 
-import os
-import re
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from zhixia.agent.tool import Tool
+
+if TYPE_CHECKING:
+    from zhixia.core.card_base import KnowledgeProvider
 
 
 class WritingAssistantTool(Tool):
@@ -12,15 +13,18 @@ class WritingAssistantTool(Tool):
     支持 CET-4、CET-6、IELTS 等英语考试写作辅导
     """
 
-    KNOWLEDGE_BASE_PATH = "d:\\Code\\ZhiXia_dev\\skills\\english_tutor_knowledge\\docs\\writing"
-
-    def __init__(self, llm_engine=None):
+    def __init__(
+        self,
+        llm_engine=None,
+        knowledge_provider: Optional["KnowledgeProvider"] = None,
+    ):
         super().__init__(
             name="writing_assistant",
             description="作文辅导器工具：获取范文、提供写作思路、推荐万能句、润色作文。参数：action（操作类型：get_example/get_ideas/get_sentences/polish）、exam_type（考试类型：cet4/cet6/ielts）、topic（作文题目/话题）、essay_type（作文类型：argumentation/narration/exposition）、user_essay（用户作文，polish时使用）",
             func=self._execute,
         )
         self._llm_engine = llm_engine
+        self._knowledge_provider = knowledge_provider
 
     def _execute(
         self,
@@ -47,7 +51,7 @@ class WritingAssistantTool(Tool):
         essay_type = essay_type.lower()
 
         if action == "get_example":
-            return self._get_example(exam_type, topic)
+            return self._get_example(exam_type, topic, essay_type)
         elif action == "get_ideas":
             return self._get_ideas(exam_type, topic, essay_type)
         elif action == "get_sentences":
@@ -57,24 +61,20 @@ class WritingAssistantTool(Tool):
         else:
             return f"【错误】不支持的操作类型：{action}。请使用：get_example/get_ideas/get_sentences/polish"
 
-    def _get_example(self, exam_type: str, topic: str) -> str:
+    def _get_example(self, exam_type: str, topic: str, essay_type: str) -> str:
         """获取范文及点评。"""
-        example_path = os.path.join(self.KNOWLEDGE_BASE_PATH, "examples", exam_type)
+        # 降级处理：无知识提供者时返回提示信息
+        if self._knowledge_provider is None:
+            return self._get_example_fallback(exam_type, topic)
 
-        if not os.path.exists(example_path):
-            return f"【获取范文】\n\n考试类型：{exam_type.upper()}\n题目：{topic}\n\n[提示：暂无可用的范文示例]"
-
-        # 读取该考试类型的所有范文
-        examples = []
-        for filename in sorted(os.listdir(example_path)):
-            if filename.endswith(".md"):
-                filepath = os.path.join(example_path, filename)
-                try:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        content = f.read()
-                        examples.append(content)
-                except Exception as e:
-                    continue
+        try:
+            # 通过 KnowledgeProvider 接口获取范文
+            examples = self._knowledge_provider.get_writing_examples(
+                exam_type=exam_type,
+                essay_type=essay_type,
+            )
+        except Exception as e:
+            return f"【获取范文】\n\n考试类型：{exam_type.upper()}\n题目：{topic}\n\n[错误：获取范文失败 - {str(e)}]"
 
         if not examples:
             return f"【获取范文】\n\n考试类型：{exam_type.upper()}\n题目：{topic}\n\n[提示：暂无可用的范文示例]"
@@ -86,7 +86,14 @@ class WritingAssistantTool(Tool):
         result += "\n" + "=" * 50 + "\n"
 
         for i, example in enumerate(examples, 1):
-            result += f"\n### 范文 {i}\n\n{example}\n"
+            result += f"\n### 范文 {i}"
+            if example.title:
+                result += f"：{example.title}"
+            result += "\n\n"
+            result += f"**作文类型**：{self._get_essay_type_name(example.essay_type)}\n\n"
+            result += f"{example.content}\n"
+            if example.analysis:
+                result += f"\n**点评**：{example.analysis}\n"
             if i < len(examples):
                 result += "\n" + "-" * 50 + "\n"
 
@@ -99,10 +106,21 @@ class WritingAssistantTool(Tool):
 
         return result
 
+    def _get_example_fallback(self, exam_type: str, topic: str) -> str:
+        """无知识提供者时的降级处理。"""
+        result = f"【获取范文】\n\n"
+        result += f"考试类型：{exam_type.upper()}\n"
+        if topic:
+            result += f"题目：{topic}\n"
+        result += "\n[提示：知识库暂不可用，无法获取范文示例]\n\n"
+        result += "💡 建议：\n"
+        result += "1. 请确保英语辅导知识卡已正确加载\n"
+        result += "2. 您可以使用 'get_ideas' 功能获取写作思路建议\n"
+        result += "3. 使用 'get_sentences' 功能获取万能句推荐\n"
+        return result
+
     def _get_ideas(self, exam_type: str, topic: str, essay_type: str) -> str:
         """针对题材提供写作思路。"""
-        template_path = os.path.join(self.KNOWLEDGE_BASE_PATH, "templates", f"{essay_type}.md")
-
         result = f"【写作思路建议】\n\n"
         result += f"考试类型：{exam_type.upper()}\n"
         result += f"作文类型：{self._get_essay_type_name(essay_type)}\n"
@@ -110,19 +128,8 @@ class WritingAssistantTool(Tool):
             result += f"题目：{topic}\n"
         result += "\n" + "=" * 50 + "\n"
 
-        # 读取模板
-        template_content = ""
-        if os.path.exists(template_path):
-            try:
-                with open(template_path, "r", encoding="utf-8") as f:
-                    template_content = f.read()
-            except Exception as e:
-                template_content = ""
-
-        if template_content:
-            result += f"\n{template_content}\n"
-        else:
-            result += "\n[提示：暂无该类型的详细模板]\n"
+        # 添加通用模板建议
+        result += self._get_template_suggestions(essay_type)
 
         # 针对不同考试类型的建议
         result += "\n" + "=" * 50 + "\n"
@@ -137,10 +144,81 @@ class WritingAssistantTool(Tool):
 
         return result
 
+    def _get_template_suggestions(self, essay_type: str) -> str:
+        """获取作文类型的模板建议。"""
+        templates = {
+            "argumentation": """
+【议论文写作模板】
+
+**第一段：开头（引入话题+表明观点）**
+- 现象引入：Recently, the issue of... has aroused widespread concern.
+- 观点表明：From my perspective, I firmly believe that...
+
+**第二段：主体（论证观点）**
+- 论点1：First and foremost, ...
+- 论据支持：For example, ... / A case in point is...
+- 论点2：Furthermore, ...
+- 论据支持：According to recent statistics, ...
+
+**第三段：让步（可选）**
+- 承认反方：Admittedly, some people argue that...
+- 反驳：However, this view overlooks the fact that...
+
+**第四段：结尾（总结+建议/展望）**
+- 总结：In conclusion, ...
+- 建议：Therefore, it is advisable to...
+- 展望：Only in this way can we...
+""",
+            "narration": """
+【记叙文写作模板】
+
+**第一段：开头（背景+引入）**
+- 时间/地点：It was a... day when...
+- 人物介绍：I was with... when suddenly...
+
+**第二段：发展（事件经过）**
+- 起因：It all began when...
+- 经过：At first... Then... Finally...
+- 细节描写：The scene was so... that...
+
+**第三段：高潮（转折点）**
+- 关键 moment：The moment I..., I realized...
+- 情感变化：Never had I felt so...
+
+**第四段：结尾（感悟+升华）**
+- 结果：Eventually, ...
+- 感悟：This experience taught me that...
+- 升华：Looking back, I now understand...
+""",
+            "exposition": """
+【说明文写作模板】
+
+**第一段：开头（定义/背景）**
+- 定义：...can be defined as...
+- 背景：In modern society, ... has become increasingly important.
+
+**第二段：主体（分类/过程/原因）**
+- 分类说明：Generally speaking, there are... types of...
+- 过程说明：The process of... involves... steps.
+  - First of all, ...
+  - Then, ...
+  - Finally, ...
+- 因果说明：The main reason why... is that...
+
+**第三段：补充（举例/对比）**
+- 举例：A typical example is...
+- 对比：Compared with..., ... has the advantage of...
+
+**第四段：结尾（总结）**
+- 总结：In summary, ...
+- 评价：Overall, ... plays a significant role in...
+""",
+        }
+
+        return templates.get(essay_type, "\n[提示：暂无该类型的详细模板]\n")
+
     def _get_sentences(self, exam_type: str, essay_type: str, topic: str) -> str:
         """推荐适用的万能句。"""
-        sentences_path = os.path.join(self.KNOWLEDGE_BASE_PATH, "universal_sentences.md")
-
         result = f"【万能句推荐】\n\n"
         result += f"考试类型：{exam_type.upper()}\n"
         result += f"作文类型：{self._get_essay_type_name(essay_type)}\n"
@@ -148,20 +226,8 @@ class WritingAssistantTool(Tool):
             result += f"题目：{topic}\n"
         result += "\n" + "=" * 50 + "\n"
 
-        # 读取万能句库
-        sentences_content = ""
-        if os.path.exists(sentences_path):
-            try:
-                with open(sentences_path, "r", encoding="utf-8") as f:
-                    sentences_content = f.read()
-            except Exception as e:
-                sentences_content = ""
-
-        if sentences_content:
-            # 根据作文类型推荐重点句型
-            result += self._extract_relevant_sentences(sentences_content, essay_type, topic)
-        else:
-            result += "\n[提示：暂无可用的万能句库]\n"
+        # 根据作文类型推荐重点句型
+        result += self._extract_relevant_sentences(essay_type, topic)
 
         # 添加使用建议
         result += "\n" + "=" * 50 + "\n"
@@ -286,7 +352,7 @@ class WritingAssistantTool(Tool):
         exam_tips = tips.get(exam_type, tips["cet4"])
         return exam_tips.get(essay_type, exam_tips["argumentation"])
 
-    def _extract_relevant_sentences(self, content: str, essay_type: str, topic: str) -> str:
+    def _extract_relevant_sentences(self, essay_type: str, topic: str) -> str:
         """根据作文类型和话题提取相关万能句。"""
         result = ""
 

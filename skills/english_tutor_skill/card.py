@@ -6,15 +6,23 @@
 - 长难句解析：分析复杂句子结构
 - 词汇记忆：词汇学习策略和记忆方法
 - 作文辅导：写作指导和范文分析
+
+解耦设计：
+- 技能卡通过 KnowledgeProvider 接口与知识卡交互
+- 支持动态发现和绑定多种知识卡
+- 无知识卡时提供降级功能
 """
 
 import json
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, TYPE_CHECKING
 
 from zhixia.agent.tool import Tool, ToolRegistry
-from zhixia.core.card_base import CardManifest, HostContext, SkillCard
+from zhixia.core.card_base import CardManifest, HostContext, SkillCard, KnowledgeProvider
+
+if TYPE_CHECKING:
+    from zhixia.core.card_base import ContentAwareKnowledgeCard
 
 # ============================================================
 # 自包含导入关键代码（所有 Skill 卡必须包含）
@@ -47,45 +55,76 @@ class EnglishTutorSkill(SkillCard):
     - 词汇复习器：滚动复习、定期检测
     - 作文辅导器：范文、思路、润色
 
+    解耦特性：
+    - 动态发现和绑定知识卡
+    - 通过 KnowledgeProvider 接口获取内容
+    - 支持多种知识卡灵活组合
+
     工具生命周期：
     - 创建：在 on_mount() 插卡时
     - 注册：在 on_mount() 插卡时
     - 注销：在 on_unmount() 拔卡时
     """
 
+    # 需要的内容类型
+    REQUIRED_CONTENT_TYPES = ["listening", "sentences", "writing", "vocabulary"]
+
     def __init__(self, manifest: CardManifest, card_root: Path) -> None:
         super().__init__(manifest, card_root)
         self._tools_created = False
+        self._knowledge_provider: Optional[KnowledgeProvider] = None
 
     def on_mount(self, host: HostContext) -> None:
-        """插卡时：创建工具 + 注册工具 + 加载人设。"""
+        """插卡时：发现知识卡 -> 创建工具 -> 注册工具 -> 加载人设。"""
         if self._tools_created:
             return  # 防止重复注册
 
         llm_engine = host.llm_engine
 
-        # 创建基础工具实例并注入LLM引擎（插卡时创建）
+        # 步骤1: 动态发现和绑定知识卡
+        self._knowledge_provider = self._discover_knowledge_provider(host)
+        if self._knowledge_provider:
+            print(f"   [解耦] 已绑定知识卡，内容类型: {', '.join(getattr(self._knowledge_provider, 'content_types', []))}")
+        else:
+            print(f"   [解耦] 警告: 未找到合适的知识卡，工具将以降级模式运行")
+
+        # 步骤2: 创建基础工具实例并注入LLM引擎（插卡时创建）
         exam_planning_tool = ExamPlanningTool(llm_engine=llm_engine)
         listening_tool = ListeningTool(llm_engine=llm_engine)
         sentence_analysis_tool = SentenceAnalysisTool(llm_engine=llm_engine)
         vocabulary_tool = VocabularyTool(llm_engine=llm_engine)
         writing_tool = WritingTool(llm_engine=llm_engine)
 
-        # 创建核心工具实例
-        exam_planner_tool = ExamPlannerTool(llm_engine=llm_engine)
-        listening_assistant_tool = ListeningAssistantTool(llm_engine=llm_engine)
-        long_sentence_tool = LongSentenceTool(llm_engine=llm_engine)
-        vocabulary_reviewer_tool = VocabularyReviewerTool(llm_engine=llm_engine)
-        writing_assistant_tool = WritingAssistantTool(llm_engine=llm_engine)
+        # 步骤3: 创建核心工具实例，注入知识提供者
+        exam_planner_tool = ExamPlannerTool(
+            llm_engine=llm_engine,
+            knowledge_provider=self._knowledge_provider
+        )
+        listening_assistant_tool = ListeningAssistantTool(
+            llm_engine=llm_engine,
+            knowledge_provider=self._knowledge_provider
+        )
+        long_sentence_tool = LongSentenceTool(
+            llm_engine=llm_engine,
+            knowledge_provider=self._knowledge_provider
+        )
+        vocabulary_reviewer_tool = VocabularyReviewerTool(
+            llm_engine=llm_engine,
+            knowledge_provider=self._knowledge_provider
+        )
+        writing_assistant_tool = WritingAssistantTool(
+            llm_engine=llm_engine,
+            knowledge_provider=self._knowledge_provider
+        )
 
-        # 注册基础工具到主机（插卡时注册）
+        # 步骤4: 注册基础工具到主机（插卡时注册）
         host.tool_registry.register(exam_planning_tool)
         host.tool_registry.register(listening_tool)
         host.tool_registry.register(sentence_analysis_tool)
         host.tool_registry.register(vocabulary_tool)
         host.tool_registry.register(writing_tool)
 
-        # 注册核心工具到主机
+        # 步骤5: 注册核心工具到主机
         host.tool_registry.register(exam_planner_tool)
         host.tool_registry.register(listening_assistant_tool)
         host.tool_registry.register(long_sentence_tool)
@@ -109,7 +148,7 @@ class EnglishTutorSkill(SkillCard):
 
         self._tools_created = True
 
-        # 加载人设
+        # 步骤6: 加载人设
         persona = self._load_persona()
         if persona:
             host.persona_holder.set_overlay(persona, self.name)
@@ -127,8 +166,40 @@ class EnglishTutorSkill(SkillCard):
         host.persona_holder.clear_overlay(self.name)
 
         self._tools_created = False
+        self._knowledge_provider = None
 
         print(f"[UNMOUNT] 英语考试辅导助手技能卡已拔出: {self.display_name}")
+
+    def _discover_knowledge_provider(self, host: HostContext) -> Optional[KnowledgeProvider]:
+        """动态发现和绑定知识卡。
+
+        通过 HostContext 查询已注册的知识卡，找到匹配的内容提供者。
+
+        Args:
+            host: 主机上下文
+
+        Returns:
+            匹配的知识提供者，如果没有则返回 None
+        """
+        # 从 knowledge_hub 获取已注册的知识卡
+        # 注意：这里假设 knowledge_hub 有办法获取知识卡实例
+        # 实际实现可能需要通过其他方式，如 host.config 或全局注册表
+
+        # 方案1: 如果 knowledge_hub 提供了获取知识卡的方法
+        if hasattr(host.knowledge_hub, '_retrievers'):
+            for name, retriever in host.knowledge_hub._retrievers.items():
+                # 检查是否是 ContentAwareKnowledgeCard
+                if hasattr(retriever, 'content_types') and hasattr(retriever, 'supported_exams'):
+                    # 检查是否提供所需的内容类型
+                    provided_types = set(retriever.content_types)
+                    required_types = set(self.REQUIRED_CONTENT_TYPES)
+                    if required_types.intersection(provided_types):
+                        return retriever
+
+        # 方案2: 通过配置或其他方式获取
+        # 这里可以根据实际架构调整
+
+        return None
 
     def get_tools(self) -> ToolRegistry:
         """获取工具列表预览（仅用于元数据展示，不创建实际工具实例）。"""
